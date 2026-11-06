@@ -45,6 +45,7 @@ namespace daqiri {
 
 struct rdma_qp_params {
   struct ibv_cq_ex* rx_cq_ex = nullptr;
+  struct ibv_cq_ex* tx_cq_ex = nullptr;
   struct ibv_cq* rx_cq;
   struct ibv_cq* tx_cq;
   daqiri::Ring* rx_ring;
@@ -107,6 +108,7 @@ struct rdma_thread_params {
   uint64_t next_receive_id = 1;
   int send_signal_every = 1;
   uint64_t sends_since_signal = 0;
+  uint32_t tx_timestamp_outstanding = 0;
 };
 
 // Used to spawn a new server thread for a particular client
@@ -156,6 +158,9 @@ class RdmaEngine : public Engine {
   uint32_t get_packet_length(BurstParams* burst, int idx) override;
   FlowId get_packet_flow_id(BurstParams* burst, int idx) override { return 0; }
   Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) override;
+  Status request_packet_tx_timestamp(BurstParams* burst, int idx, TxTimestampId* id) override;
+  Status get_packet_tx_timestamp(TxTimestampId id, uint64_t* timestamp_ns) override;
+  Status release_tx_timestamp(TxTimestampId id) override;
   void* get_packet_extra_info(BurstParams* burst, int idx) override { return nullptr; }
   void* get_segment_packet_ptr(BurstParams* burst, int seg, int idx) override;
   uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) override;
@@ -227,6 +232,21 @@ class RdmaEngine : public Engine {
   static constexpr int MAX_RDMA_BATCH = kRdmaBatch;
 
   bool initialized_ = false;
+  struct TxTimestampRequest {
+    uintptr_t connection_id = 0;
+    rdma_thread_params* connection = nullptr;
+    bool server = false;
+    Status status = Status::NOT_READY;
+    uint64_t timestamp_ns = 0;
+  };
+  static constexpr size_t kMaxTxTimestampRequests = 4096;
+  std::mutex tx_timestamp_mutex_;
+  std::unordered_map<TxTimestampId, TxTimestampRequest> tx_timestamp_requests_;
+  // Allocate per-burst ID arrays only for bursts that request timestamps.
+  std::unordered_map<BurstParams*, std::vector<TxTimestampId>> tx_timestamp_bursts_;
+  void finish_tx_timestamp(TxTimestampId id, Status status, uint64_t timestamp_ns = 0);
+  void clear_burst_tx_timestamps(BurstParams* burst);
+  void fail_connection_tx_timestamps(rdma_thread_params* params);
   std::unordered_map<struct rdma_cm_id*, std::vector<rdma_thread_params>> server_q_params_;
   std::unordered_map<struct rdma_cm_id*, rdma_thread_params> client_q_params_;
   std::unordered_map<struct rdma_cm_id*, rdma_port_params> pd_params_;
@@ -266,6 +286,7 @@ class RdmaEngine : public Engine {
   Status poll_direct(RdmaDirectState& state, bool tx, bool server);
   int poll_rx_completion(rdma_thread_params* params, ibv_wc* wc, uint64_t* timestamp_ns);
   bool setup_ud_peer(rdma_thread_params* params, const rdma_ud_param& peer);
+  int poll_tx_completion(rdma_thread_params* params, ibv_wc* wc, uint64_t* timestamp_ns);
   const RdmaDirectMr* direct_region(RdmaDirectState& state, BurstParams* burst);
   Ring* burst_pool(BurstParams* burst);
   void initialize_progress(bool is_server, rdma_thread_params* params);
@@ -285,6 +306,7 @@ class RdmaEngine : public Engine {
   void handle_connect_request(rdma_cm_event* event);
   void launch_worker(rdma_thread_params* params, bool is_server);
   int mr_access_to_ibv(uint32_t access);
+  size_t buffer_stride(MemoryKind kind, size_t buf_size);
   bool get_ip_from_interface(const std::string_view& if_name, sockaddr_in& addr);
   int setup_thread_params(rdma_thread_params* params, bool is_server);
   int destroy_thread_params(rdma_thread_params* params);

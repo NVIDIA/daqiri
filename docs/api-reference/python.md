@@ -513,6 +513,56 @@ domain as a PTP-synchronized `CLOCK_REALTIME`. Device-clock ticks are not accept
 **WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
 configuration. Scheduled transmission is invalid if the clocks are not PTP-synchronized.
 
+### Transmit Completion Timestamps
+
+Raw ibverbs and RDMA/RoCE expose hardware TX completion timestamps without a YAML option:
+
+```python
+import time
+
+# After acquiring packet buffers, before submitting the burst:
+status, request_id = daqiri.request_packet_tx_timestamp(burst, packet_index)
+if status == daqiri.Status.SUCCESS:
+    daqiri.send_tx_burst(burst)  # Follow the engine's usual completion ownership rules.
+    try:
+        deadline = time.monotonic() + 1.0
+        while True:
+            status, tx_ns = daqiri.get_packet_tx_timestamp(request_id)
+            if status != daqiri.Status.NOT_READY or time.monotonic() >= deadline:
+                break
+        if status == daqiri.Status.SUCCESS:
+            print(tx_ns)  # NIC completion timestamp in PTP epoch ns.
+    finally:
+        daqiri.release_tx_timestamp(request_id)
+```
+
+The request ID remains valid after raw burst metadata is recycled or an RDMA
+completion is freed. Reads are
+nonblocking and repeatable; release every ID, even when abandoning a pending
+request. There are 4096 request slots per engine. Direct TX requires the queue's
+owner thread to call the getter to poll completions. Indirect TX uses the worker.
+Scheduled sends are supported on both engines; raw ibverbs additionally supports
+gathered segments, named endpoints, and shared-buffer clones. Clones need separate
+requests. Requested operations get individual signaled WQEs, which increases CQ
+traffic. Raw bursts with requests bypass multi-packet packing. DPDK and plain
+UDP/TCP return `NOT_SUPPORTED`.
+
+For RDMA, `packet_index` selects a `SEND`, `RDMA_READ`, `RDMA_WRITE`, or
+`RDMA_WRITE_IMM` work request, which may span multiple wire packets. A READ timestamp
+includes response arrival. Continue dequeuing normal completions with
+`get_rx_burst_for_connection()` and releasing them with `free_tx_burst()`; reading
+timestamps preserves these completions and their buffer ownership. Reusing an
+RDMA header cancels its previous unsent requests. No RX timestamp or accurate-send
+option is needed. When the provider cannot create a timestamp-capable TX CQ,
+ordinary TX remains available and timestamp requests return `NOT_SUPPORTED`.
+
+Cancelled/dropped operations, CQ errors, queue removal, and RDMA disconnection return `GENERIC_FAILURE`;
+shutdown invalidates all IDs. The value is sampled by the NIC for the TX CQE,
+independently of the requested send time. The hardware defines its measurement
+point, so it is not a calibrated wire-departure timestamp. PTP synchronization is
+required for comparisons with system time or another device. See the
+[C++ timestamp contract](cpp.md#transmit-completion-timestamps) for details.
+
 ## Writing Bursts to Storage
 
 Received bursts can be written to local storage as raw packet data or as a
@@ -696,6 +746,9 @@ currently includes:
 - `daqiri_write_raw_to_file`, `daqiri_write_pcap_to_file`
 - `synchronize_burst_event`
 
+The TX timestamp request, getter, and release calls keep the GIL held. The getter
+does not wait for completion; direct queues poll their CQ during the call.
+
 Python code still needs its own synchronization for shared Python objects used
 by worker threads.
 
@@ -748,6 +801,9 @@ The workflow sections above show the common call order and ownership rules.
 | `get_packet_length(burst, idx)` / `get_segment_packet_length(burst, seg, idx)` | Read packet or segment length. |
 | `get_packet_flow_id(burst, idx)` | Read matched flow ID, or `0` when no flow matched. |
 | `get_packet_rx_timestamp(burst, idx)` | Return `(Status, timestamp_ns)` with a PTP epoch-nanosecond timestamp. |
+| `request_packet_tx_timestamp(burst, idx)` | Return `(Status, request_id)` before TX submission (raw ibverbs or RDMA). |
+| `get_packet_tx_timestamp(request_id)` | Return `(Status, timestamp_ns)` from the requested NIC TX CQE, or `NOT_READY`. |
+| `release_tx_timestamp(request_id)` | Release a pending or completed timestamp request; return `Status`. |
 | `copy_buffer_to_packet(burst, idx, data, nbytes=None, src_offset=0, dst_offset=0)` | Copy a Python buffer into segment 0. |
 | `copy_buffer_to_segment_packet(burst, seg, idx, data, nbytes=None, src_offset=0, dst_offset=0)` | Copy a Python buffer into a specific segment. |
 | `get_packet_bytes(burst, idx, nbytes=None, src_offset=0)` | Return `(Status, bytes)` from segment 0. |

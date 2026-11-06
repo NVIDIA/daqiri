@@ -58,6 +58,11 @@
 
 namespace daqiri {
 
+TxTimestampId detail::next_tx_timestamp_id() {
+  static std::atomic<TxTimestampId> next{1};
+  return next.fetch_add(1, std::memory_order_relaxed);
+}
+
 // Initialize static members
 std::unique_ptr<Engine> EngineFactory::EngineInstance_ = nullptr;  // Initialize static members
 EngineType EngineFactory::EngineType_ = EngineType::UNKNOWN;

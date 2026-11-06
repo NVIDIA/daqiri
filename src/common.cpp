@@ -436,6 +436,21 @@ Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_
   return g_daqiri_engine->get_packet_rx_timestamp(burst, idx, timestamp_ns);
 }
 
+Status request_packet_tx_timestamp(BurstParams* burst, int idx, TxTimestampId* id) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->request_packet_tx_timestamp(burst, idx, id);
+}
+
+Status get_packet_tx_timestamp(TxTimestampId id, uint64_t* timestamp_ns) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_packet_tx_timestamp(id, timestamp_ns);
+}
+
+Status release_tx_timestamp(TxTimestampId id) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->release_tx_timestamp(id);
+}
+
 uint64_t get_burst_tot_byte(BurstParams* burst) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
   return g_daqiri_engine->get_burst_tot_byte(burst);
@@ -1035,7 +1050,8 @@ Status get_memory_region_requirements(const NetworkConfig& config,
         req.slot_size = ceil_power_of_two(mr.buf_size_);
         break;
       case EngineType::RDMA:
-        req.slot_size = ceil_to(mr.buf_size_, gpu_page_size);
+        // Matches RdmaEngine::buffer_stride(): only GPU buffers keep GPU-page alignment.
+        req.slot_size = ceil_to(mr.buf_size_, mr.kind_ == MemoryKind::DEVICE ? gpu_page_size : 128);
         break;
       default:
         DAQIRI_LOG_ERROR("Cannot compute memory requirements for engine {}",

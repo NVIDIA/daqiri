@@ -311,6 +311,47 @@ Status SocketEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64
   return Status::NOT_SUPPORTED;
 }
 
+Status SocketEngine::request_packet_tx_timestamp(BurstParams* burst, int idx, TxTimestampId* id) {
+  if (!id) return Status::NULL_PTR;
+  *id = INVALID_TX_TIMESTAMP_ID;
+  if (!burst) return Status::NULL_PTR;
+  if (is_roce_protocol()) {
+#if DAQIRI_ENGINE_RDMA
+    return roce_engine_ ? roce_engine_->request_packet_tx_timestamp(burst, idx, id)
+                        : roce_not_initialized("request_packet_tx_timestamp");
+#else
+    return roce_not_initialized("request_packet_tx_timestamp");
+#endif
+  }
+  return Status::NOT_SUPPORTED;
+}
+
+Status SocketEngine::get_packet_tx_timestamp(TxTimestampId id, uint64_t* timestamp_ns) {
+  if (!timestamp_ns) return Status::NULL_PTR;
+  *timestamp_ns = 0;
+  if (is_roce_protocol()) {
+#if DAQIRI_ENGINE_RDMA
+    return roce_engine_ ? roce_engine_->get_packet_tx_timestamp(id, timestamp_ns)
+                        : roce_not_initialized("get_packet_tx_timestamp");
+#else
+    return roce_not_initialized("get_packet_tx_timestamp");
+#endif
+  }
+  return Status::NOT_SUPPORTED;
+}
+
+Status SocketEngine::release_tx_timestamp(TxTimestampId id) {
+  if (is_roce_protocol()) {
+#if DAQIRI_ENGINE_RDMA
+    return roce_engine_ ? roce_engine_->release_tx_timestamp(id)
+                        : roce_not_initialized("release_tx_timestamp");
+#else
+    return roce_not_initialized("release_tx_timestamp");
+#endif
+  }
+  return Status::NOT_SUPPORTED;
+}
+
 void* SocketEngine::get_packet_extra_info(BurstParams* burst, int idx) {
   return nullptr;
 }

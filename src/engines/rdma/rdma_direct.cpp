@@ -17,6 +17,18 @@ const void* caller_identity() {
 size_t direct_hash(uintptr_t id) {
   return (id >> 4) ^ (id >> 16);
 }
+// Payloads small enough to send inline from CPU memory; the CPU copies them into the WQE.
+bool inline_eligible(const RdmaDirectMr& region, uint32_t length, uint32_t max_inline) {
+  const auto kind = region.region->params_.kind_;
+  return (kind == MemoryKind::HUGE || kind == MemoryKind::HOST_PINNED) && length <= max_inline;
+}
+constexpr uint32_t kCacheLineBytes = 64;
+void prefetch_payload(const void* data, uint32_t bytes) {
+  const auto* payload = static_cast<const char*>(data);
+  for (uint32_t offset = 0; offset < bytes; offset += kCacheLineBytes) {
+    __builtin_prefetch(payload + offset);
+  }
+}
 }  // namespace
 
 void RdmaDirectState::close() {
@@ -199,17 +211,16 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
       state.send.wr.ud.remote_qkey = params.ud_qkey;
     }
     const bool signal =
-        one_sided || params.send_signal_every == 1 ||
+        rdma_packet_tx_timestamp_id(burst, 0) != INVALID_TX_TIMESTAMP_ID || one_sided ||
+        params.send_signal_every == 1 ||
         params.sends_since_signal + 1 >= static_cast<uint64_t>(params.send_signal_every) ||
         state.sends_posted - state.sends_completed >= 15;
     state.send.send_flags = signal ? IBV_SEND_SIGNALED : 0;
     if (params.client_id->qp->qp_type == IBV_QPT_RC) {
       state.send.send_flags |= IBV_SEND_FENCE;
     }
-    const auto kind = region->region->params_.kind_;
     if (opcode == RDMAOpCode::SEND &&
-        (kind == MemoryKind::HUGE || kind == MemoryKind::HOST_PINNED) &&
-        state.sge.length <= params.max_inline_data) {
+        inline_eligible(*region, state.sge.length, params.max_inline_data)) {
       state.send.send_flags |= IBV_SEND_INLINE;
     }
     ibv_send_wr* bad = nullptr;
@@ -221,6 +232,10 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
       return Status::GENERIC_FAILURE;
     }
     slot = {burst, tag};
+    if (rdma_packet_tx_timestamp_id(burst, 0) != INVALID_TX_TIMESTAMP_ID) {
+      ++params.tx_timestamp_outstanding;
+      rdma_burst_cache(burst).tx_timestamp_submitted = true;
+    }
     state.sends_posted = tag;
     params.sends_since_signal = signal ? 0 : params.sends_since_signal + 1;
     if (state.send.send_flags & IBV_SEND_INLINE) {
@@ -263,7 +278,7 @@ Status RdmaEngine::poll_direct(RdmaDirectState& state, bool tx, bool server) {
   ibv_wc wc{};
   uint64_t timestamp_ns = UINT64_MAX;
   auto& params = *state.params;
-  const int count = tx ? verbs_->poll_cq(params.qp_params.tx_cq, 1, &wc)
+  const int count = tx ? poll_tx_completion(&params, &wc, &timestamp_ns)
                        : poll_rx_completion(&params, &wc, &timestamp_ns);
   if (count <= 0) {
     return count == 0 ? Status::NOT_READY : Status::GENERIC_FAILURE;
@@ -281,6 +296,20 @@ Status RdmaEngine::poll_direct(RdmaDirectState& state, bool tx, bool server) {
     burst->transport_hdr.status = status;
     burst->transport_hdr.tx = transmit;
     burst->transport_hdr.server = server;
+    if (transmit) {
+      const auto id = rdma_packet_tx_timestamp_id(burst, 0);
+      if (id != INVALID_TX_TIMESTAMP_ID) {
+        if (params.tx_timestamp_outstanding) --params.tx_timestamp_outstanding;
+        // A later signaled completion may reclaim preceding unsignaled sends,
+        // but its timestamp belongs only to its own work request.
+        finish_tx_timestamp(
+            id,
+            status == Status::SUCCESS && slot.tag == wc.wr_id && timestamp_ns != UINT64_MAX
+                ? Status::SUCCESS
+                : Status::GENERIC_FAILURE,
+            timestamp_ns);
+      }
+    }
     if (status == Status::SUCCESS) {
       if (transmit) {
         metrics::add_tx(state.counters, 1, burst->pkt_lens[0][0]);
@@ -298,6 +327,15 @@ Status RdmaEngine::poll_direct(RdmaDirectState& state, bool tx, bool server) {
           }
         }
         rdma_set_rx_timestamp(burst, 0, timestamp_ns);
+        const auto* region = rdma_burst_cache(burst).region;
+        if (wc.opcode == IBV_WC_RECV && region &&
+            inline_eligible(*region, wc.byte_len, params.max_inline_data)) {
+          // The CPU reads small payloads next, whether it parses them or echoes them
+          // inline, and the NIC wrote them by DMA. Start fetching them while the
+          // completion is returned. Larger payloads are usually forwarded by DMA,
+          // where lines already in the CPU cache slow the NIC's read.
+          prefetch_payload(burst->pkts[0][0], wc.byte_len);
+        }
         metrics::add_rx(state.counters, 1, wc.byte_len);
       }
     } else {

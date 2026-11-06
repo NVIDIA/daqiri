@@ -754,6 +754,78 @@ domain as a PTP-synchronized `CLOCK_REALTIME`. Device-clock ticks are not accept
 **WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
 configuration. Scheduled transmission is invalid if the clocks are not PTP-synchronized.
 
+### Transmit Completion Timestamps
+
+Raw ibverbs and RDMA/RoCE support requesting a hardware TX completion timestamp for an
+individual packet. The timestamp records the NIC's completion time, independently of
+the desired send time supplied through `set_packet_tx_time()`. The NIC defines the
+measurement point; this is not a calibrated wire-departure timestamp and does not
+guarantee ordering against the desired send time. No YAML option is needed.
+After acquiring packet buffers, request the timestamp before submitting the burst:
+
+```cpp
+#include <chrono>
+
+daqiri::TxTimestampId id = daqiri::INVALID_TX_TIMESTAMP_ID;
+auto status = daqiri::request_packet_tx_timestamp(burst, packet_index, &id);
+if (status == daqiri::Status::SUCCESS) {
+    // Fill and submit using the engine's normal burst ownership rules.
+    daqiri::send_tx_burst(burst);
+    uint64_t tx_ns = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    do {
+        status = daqiri::get_packet_tx_timestamp(id, &tx_ns);
+    } while (status == daqiri::Status::NOT_READY && std::chrono::steady_clock::now() < deadline);
+    if (status == daqiri::Status::SUCCESS) {
+        // tx_ns is the NIC's completion time for this packet.
+    }
+    daqiri::release_tx_timestamp(id);
+}
+```
+
+The ID outlives raw TX burst metadata and freed RDMA completions. Follow the
+engine's usual burst ownership rules when submitting and releasing buffers.
+Reads are nonblocking and repeatable. Release each ID, including pending requests
+when abandoning a wait. Releasing a request does not cancel transmission. Up to
+4096 requests can be retained per engine; further requests return
+`NO_SPACE_AVAILABLE`. A second request for the same packet returns `ALREADY_EXISTS`.
+Cancelling an unsent burst, dropping it at TX admission, a CQ error, or removing
+its queue or disconnecting its RDMA connection makes pending requests return
+`GENERIC_FAILURE`. Shutdown invalidates all IDs. Requests are not copied to cloned
+bursts. Reusing an RDMA header cancels previous unsent requests for that burst.
+
+Direct and indirect TX and scheduled sends are supported. Raw ibverbs also
+supports gathered segments, named endpoints, and shared-buffer clones. On direct
+queues the owner thread must call the getter to drive CQ polling, including after
+its final send. Each requested operation gets a signaled WQE, adding CQ traffic.
+Raw bursts with requests additionally bypass multi-packet WQE packing, potentially
+reducing throughput. DPDK and plain UDP/TCP return `NOT_SUPPORTED`.
+
+For RDMA, `idx` selects a `SEND`, `RDMA_READ`, `RDMA_WRITE`, or `RDMA_WRITE_IMM`
+work request, which may span multiple wire packets. A READ timestamp describes
+completion of the READ, including arrival of its response. Continue dequeuing
+normal RDMA completions with `get_rx_burst()` and release them with
+`free_tx_burst()`; timestamp retrieval does not consume these completions or return
+their buffers. Direct timestamp polling retains decoded completions until the
+application drains them, so normal completion backpressure still applies.
+
+RDMA requests a timestamp-capable TX CQ at connection setup. Providers without
+that capability retain ordinary transmission, and timestamp requests return
+`NOT_SUPPORTED`. This does not require `rx.hardware_timestamps` or `tx.accurate_send`.
+With accurate send enabled, the getter normalizes the real-time CQ format; otherwise
+the provider converts device-clock values to epoch nanoseconds. Each successful
+request is independent of the application WR ID and the batch completion status:
+if a batch is only partly posted, unposted requests fail while posted requests
+finish from their own CQEs.
+
+The timestamp comes from the requested operation's TX CQE, in PTP epoch
+nanoseconds, independently of `set_packet_tx_time()`. Real-time CQ values are
+unpacked; device-clock values are converted when the CQE is polled. The NIC
+defines the completion measurement point: this is not a calibrated
+wire-departure timestamp. PTP synchronization is required for comparisons with
+`CLOCK_REALTIME` or other devices. See the
+[mlx5 PRM, CQE Timestamping](https://network.nvidia.com/files/doc-2020/ethernet-adapters-programming-manual.pdf).
+
 ## Writing Bursts to Storage
 
 Received bursts can be written to local storage either as raw packet data or as a classic
@@ -1001,6 +1073,9 @@ workflow sections above show the common call order and ownership rules.
 | `get_segment_packet_length(burst, seg, idx)` | Return the length of one packet segment. |
 | `get_packet_flow_id(burst, idx)` | Return the matched `FlowId`, or `0` when no flow matched. |
 | `get_packet_rx_timestamp(burst, idx, &timestamp_ns)` | Return the hardware RX timestamp when enabled and available. |
+| `request_packet_tx_timestamp(burst, idx, &id)` | Request a packet/work request's NIC TX completion timestamp before submission (raw ibverbs or RDMA); return a `TxTimestampId`. |
+| `get_packet_tx_timestamp(id, &timestamp_ns)` | Read the requested TX CQE timestamp, or return `NOT_READY`. |
+| `release_tx_timestamp(id)` | Release a pending or completed TX timestamp request. |
 
 ### Dynamic RX Flow Lifecycle
 

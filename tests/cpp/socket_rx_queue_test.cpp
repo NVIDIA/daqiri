@@ -26,11 +26,45 @@
 #include <unistd.h>
 
 #include "src/engines/socket/daqiri_socket_engine.h"
+#if DAQIRI_ENGINE_RDMA
+#include "src/engines/rdma/daqiri_rdma_engine.h"
+#endif
 
 namespace daqiri {
 
 class SocketEngineQueueTestPeer {
  public:
+  static bool roce_tx_timestamps() {
+#if DAQIRI_ENGINE_RDMA
+    class TimestampRdmaEngine : public RdmaEngine {
+     public:
+      Status request_packet_tx_timestamp(BurstParams*, int idx, TxTimestampId* id) override {
+        *id = 123 + idx;
+        return Status::SUCCESS;
+      }
+      Status get_packet_tx_timestamp(TxTimestampId id, uint64_t* ns) override {
+        *ns = id * 1000;
+        return Status::SUCCESS;
+      }
+      Status release_tx_timestamp(TxTimestampId id) override {
+        return id == 125 ? Status::SUCCESS : Status::INVALID_PARAMETER;
+      }
+    };
+    SocketEngine engine;
+    engine.cfg_.common_.stream_type = StreamType::SOCKET;
+    engine.cfg_.common_.protocol = SocketProtocol::ROCE;
+    engine.roce_engine_ = std::make_unique<TimestampRdmaEngine>();
+    BurstParams burst{};
+    TxTimestampId id = 0;
+    uint64_t ns = 0;
+    return engine.request_packet_tx_timestamp(&burst, 2, &id) == Status::SUCCESS && id == 125 &&
+           engine.get_packet_tx_timestamp(id, &ns) == Status::SUCCESS && ns == 125000 &&
+           engine.release_tx_timestamp(id) == Status::SUCCESS;
+#else
+    return true;
+#endif
+  }
+
   static bool tcp_registration_checks_affinity(int cpu_core, bool expect_success) {
     SocketEngine engine;
     engine.running_.store(true);
@@ -322,6 +356,23 @@ class SocketEngineQueueTestPeer {
 }  // namespace daqiri
 
 int main() {
+  if (!daqiri::SocketEngineQueueTestPeer::roce_tx_timestamps()) {
+    std::cerr << "RoCE socket engine did not delegate TX timestamps to RDMA\n";
+    return 1;
+  }
+  {
+    daqiri::SocketEngine engine;
+    daqiri::BurstParams burst{};
+    daqiri::TxTimestampId id = 123;
+    uint64_t timestamp_ns = 123;
+    if (engine.request_packet_tx_timestamp(&burst, 0, &id) != daqiri::Status::NOT_SUPPORTED ||
+        id != daqiri::INVALID_TX_TIMESTAMP_ID ||
+        engine.get_packet_tx_timestamp(123, &timestamp_ns) != daqiri::Status::NOT_SUPPORTED ||
+        timestamp_ns != 0 || engine.release_tx_timestamp(123) != daqiri::Status::NOT_SUPPORTED) {
+      std::cerr << "unsupported engine returned a TX timestamp\n";
+      return 1;
+    }
+  }
   cpu_set_t allowed;
   CPU_ZERO(&allowed);
   if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0) {

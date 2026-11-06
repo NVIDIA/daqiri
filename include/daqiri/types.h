@@ -96,6 +96,10 @@ enum class Status {
   ALREADY_EXISTS,
 };
 
+// A timestamp request outlives the TX burst metadata consumed by send_tx_burst.
+using TxTimestampId = uint64_t;
+constexpr TxTimestampId INVALID_TX_TIMESTAMP_ID = 0;
+
 enum class RDMAOpCode {
   CONNECT,
   SEND,
