@@ -730,7 +730,9 @@ def generate_raw_pairs(specs: list[RawPairSpec]) -> dict[str, Any]:
                 raise ConfigError(
                     f"pair {index}: interface address must be a non-empty string"
                 )
-            normalized = address.strip().lower()
+            normalized = address.strip()
+            if re.fullmatch(r"[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]", normalized):
+                normalized = normalized.lower()
             if normalized in addresses:
                 raise ConfigError(f"pair {index}: duplicate interface address: {address}")
             addresses.add(normalized)

@@ -258,7 +258,7 @@ def test_socket_cli_rejects_inapplicable_transport_options(
     ('{}', "non-empty JSON object"),
     ('[]', "non-empty JSON object"),
     ('{', "invalid --pair"),
-    ('{"tx_address":"a"}', "tx_address and rx_address are required"),
+    ('{"tx_address":"a"}', "raw-pair requires rx_address"),
     ('{"typo":1}', "unknown pair fields"),
     ('{"tx_address":"a","tx_address":"b"}', "duplicate pair field"),
     ('{"tx_queue_cores":"1,2"}', "array of CPU indices"),

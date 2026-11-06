@@ -351,10 +351,6 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 specs = []
                 for index, pair in enumerate(args.pair):
-                    if not pair.get("tx_address") or not pair.get("rx_address"):
-                        raise ConfigError(
-                            f"pair {index}: tx_address and rx_address are required"
-                        )
                     try:
                         specs.append(_raw_spec(argparse.Namespace(**{**vars(args), **pair})))
                     except ConfigError as exc:

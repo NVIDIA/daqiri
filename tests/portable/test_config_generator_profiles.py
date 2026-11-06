@@ -349,3 +349,15 @@ def test_multiple_raw_pairs_reject_ambiguous_topology(overrides, error):
         generate_raw_pairs([raw_spec(), raw_spec(**overrides)])
     with pytest.raises(ConfigError, match="at least one"):
         generate_raw_pairs([])
+
+
+def test_multiple_raw_pairs_preserve_case_sensitive_interface_names():
+    document = generate_raw_pairs([raw_spec(tx_address="PortA", rx_address="porta")])
+    assert [interface["address"] for interface in document["daqiri"]["cfg"]["interfaces"]] == [
+        "PortA", "porta",
+    ]
+
+
+def test_multiple_raw_pairs_reject_duplicate_pci_addresses_ignoring_case():
+    with pytest.raises(ConfigError, match="duplicate interface address"):
+        generate_raw_pairs([raw_spec(tx_address="0000:AB:00.0", rx_address="0000:ab:00.0")])

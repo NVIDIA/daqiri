@@ -126,11 +126,8 @@ engine, memory sizing, and packet settings are shared. This works with both
 `--engine ibverbs` and `--engine dpdk`, including `--daqiri-only`.
 
 Pair input requires the default `--role loopback`; it cannot be combined with
-`--tx-address`, `--rx-address`, or `--output-dir`. Missing required fields,
-unknown or duplicate JSON keys, and reused interface addresses fail with an
-error. Interface, memory-region, queue, and flow names receive a `pair_0_`,
-`pair_1_`, … prefix when multiple pairs are present. Queue IDs remain local
-to their interface; flow IDs are unique across the combined document. Existing commands without `--pair` retain their output.
+`--tx-address`, `--rx-address`, or `--output-dir`. Existing commands without
+`--pair` retain their output.
 
 For a Spark with a physical p0-to-p1 cable, verify the PCI attachments and MACs
 first. These netdev names are examples; use the names on your machine:
@@ -145,16 +142,25 @@ done
 
 The following complete example uses both PCIe attachments concurrently, with
 p0 transmitting to p1 through the cable. Replace the illustrated PCI/MAC values
-with the lookup results. On a 20-core Spark, cores 5–9 and 15–19 are performance
-cores; verify placement with `lscpu -e=CPU,MAXMHZ` on your system. This example
-uses host-pinned memory, which also works when GB10 DMA-BUF export is unavailable.
+with the lookup results and choose available CPU cores (`lscpu -e=CPU,MAXMHZ`).
+Host-pinned memory also works when GB10 DMA-BUF export is unavailable.
 
 ```bash
 python3 scripts/gen_daqiri_config.py raw-pair \
   --master-core 8 --engine ibverbs --memory-kind host_pinned \
   --payload-size 8000 --batch-size 1024 --num-bufs 51200 \
-  --pair '{"tx_address":"0000:01:00.0","rx_address":"0000:01:00.1","eth_src_addr":"02:00:00:00:00:01","eth_dst_addr":"02:00:00:00:00:02","tx_queue_cores":[5],"rx_queue_cores":[6],"tx_worker_cores":[7],"rx_worker_cores":[9]}' \
-  --pair '{"tx_address":"0002:01:00.0","rx_address":"0002:01:00.1","eth_src_addr":"02:00:00:00:00:03","eth_dst_addr":"02:00:00:00:00:04","tx_queue_cores":[15],"rx_queue_cores":[16],"tx_worker_cores":[17],"rx_worker_cores":[19]}' \
+  --pair '{
+    "tx_address":"0000:01:00.0", "rx_address":"0000:01:00.1",
+    "eth_src_addr":"02:00:00:00:00:01", "eth_dst_addr":"02:00:00:00:00:02",
+    "tx_queue_cores":[5], "rx_queue_cores":[6],
+    "tx_worker_cores":[7], "rx_worker_cores":[9]
+  }' \
+  --pair '{
+    "tx_address":"0002:01:00.0", "rx_address":"0002:01:00.1",
+    "eth_src_addr":"02:00:00:00:00:03", "eth_dst_addr":"02:00:00:00:00:04",
+    "tx_queue_cores":[15], "rx_queue_cores":[16],
+    "tx_worker_cores":[17], "rx_worker_cores":[19]
+  }' \
   --output spark-two-pairs.yaml
 
 # Run as root in the privileged project container, with the NICs in its namespace.
@@ -162,10 +168,8 @@ python3 scripts/gen_daqiri_config.py raw-pair \
 ```
 
 The file contains four interfaces, four memory regions, two `bench_tx` entries,
-and two `bench_rx` entries. Measure stable physical NIC rates with `mlnx_perf`
-and check per-queue RX/drop statistics. The generated topology alone does not
-guarantee 200 Gbps; link speed, PCIe bandwidth, memory placement, and CPU load
-also affect throughput. Multiple attachments can expose counters for the same
+and two `bench_rx` entries. Follow the [raw benchmark guide](benchmarks/raw_benchmarking.md)
+for throughput measurement. Multiple attachments can expose counters for the same
 physical port: do not sum those counters or count both TX and RX as independent
 throughput.
 
