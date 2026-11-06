@@ -8,8 +8,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
+from typing import Any
 
 # CMake replaces this token in the installed launcher with either a path
 # relative to CMAKE_INSTALL_BINDIR or an absolute GNUInstallDirs data path.
@@ -29,6 +31,7 @@ from daqiri_config import (
     SocketPairSpec,
     apply_overrides,
     generate_raw_pair,
+    generate_raw_pairs,
     generate_raw_roles,
     generate_socket_pair,
     load_document,
@@ -44,6 +47,48 @@ def _cores(value: str) -> tuple[int, ...]:
     if not cores:
         raise argparse.ArgumentTypeError("CPU list must not be empty")
     return cores
+
+
+PAIR_FIELDS = {
+    "tx_address",
+    "rx_address",
+    "eth_src_addr",
+    "eth_dst_addr",
+    "tx_queue_cores",
+    "rx_queue_cores",
+    "tx_worker_cores",
+    "rx_worker_cores",
+}
+
+
+def _pair(value: str) -> dict[str, Any]:
+    def unique_keys(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        result = {}
+        for key, item in items:
+            if key in result:
+                raise ValueError(f"duplicate pair field: {key}")
+            result[key] = item
+        return result
+
+    try:
+        pair = json.loads(value, object_pairs_hook=unique_keys)
+        if not isinstance(pair, dict) or not pair:
+            raise ValueError("expected a non-empty JSON object")
+        unknown = pair.keys() - PAIR_FIELDS
+        if unknown:
+            raise ValueError(f"unknown pair fields: {', '.join(sorted(unknown))}")
+        for key, item in pair.items():
+            if key.endswith("_cores"):
+                if not isinstance(item, list) or not item or any(
+                    type(core) is not int for core in item
+                ):
+                    raise ValueError(f"{key} must be a non-empty array of CPU indices")
+                pair[key] = tuple(item)
+            elif not isinstance(item, str) or not item.strip():
+                raise ValueError(f"{key} must be a non-empty string")
+        return pair
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid --pair: {exc}") from exc
 
 
 def _add_output_argument(parser: argparse.ArgumentParser) -> None:
@@ -118,14 +163,22 @@ def _raw_parser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "raw-pair", help="generate a raw-Ethernet TX/RX configuration"
     )
-    parser.add_argument("--tx-address", required=True, help="TX PCI BDF or interface")
-    parser.add_argument("--rx-address", required=True, help="RX PCI BDF or interface")
+    parser.add_argument("--tx-address", help="TX PCI BDF or interface")
+    parser.add_argument("--rx-address", help="RX PCI BDF or interface")
     parser.add_argument("--master-core", type=int, required=True)
-    parser.add_argument("--tx-queue-cores", type=_cores, required=True)
-    parser.add_argument("--rx-queue-cores", type=_cores, required=True)
+    parser.add_argument("--tx-queue-cores", type=_cores)
+    parser.add_argument("--rx-queue-cores", type=_cores)
     parser.add_argument("--tx-worker-cores", type=_cores, default=())
     parser.add_argument("--rx-worker-cores", type=_cores, default=())
-    parser.add_argument("--eth-dst-addr", required=True)
+    parser.add_argument("--eth-dst-addr")
+    parser.add_argument(
+        "--pair",
+        action="append",
+        default=[],
+        type=_pair,
+        metavar="JSON",
+        help="add a TX/RX pair as a JSON object; repeat for one combined loopback config",
+    )
     parser.add_argument("--ip-src-addr", default="1.1.1.1")
     parser.add_argument("--ip-dst-addr", default="2.2.2.2")
     parser.add_argument("--udp-port-base", type=int, default=4096)
@@ -233,6 +286,11 @@ def _socket_spec(args: argparse.Namespace) -> SocketPairSpec:
 
 
 def _raw_spec(args: argparse.Namespace) -> RawPairSpec:
+    for key in (
+        "tx_address", "rx_address", "tx_queue_cores", "rx_queue_cores", "eth_dst_addr"
+    ):
+        if not getattr(args, key):
+            raise ConfigError(f"raw-pair requires {key}")
     return RawPairSpec(
         tx_address=args.tx_address,
         rx_address=args.rx_address,
@@ -282,6 +340,27 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "raw-pair":
+            if args.pair:
+                if args.role != "loopback" or args.output_dir:
+                    raise ConfigError(
+                        "--pair requires --role loopback and does not use --output-dir"
+                    )
+                if args.tx_address or args.rx_address:
+                    raise ConfigError(
+                        "--pair cannot be combined with --tx-address or --rx-address"
+                    )
+                specs = []
+                for index, pair in enumerate(args.pair):
+                    if not pair.get("tx_address") or not pair.get("rx_address"):
+                        raise ConfigError(
+                            f"pair {index}: tx_address and rx_address are required"
+                        )
+                    try:
+                        specs.append(_raw_spec(argparse.Namespace(**{**vars(args), **pair})))
+                    except ConfigError as exc:
+                        raise ConfigError(f"pair {index}: {exc}") from exc
+                _write(render_document(generate_raw_pairs(specs)), args.output)
+                return 0
             spec = _raw_spec(args)
             if args.role == "loopback":
                 if args.output_dir:

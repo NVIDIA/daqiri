@@ -714,6 +714,65 @@ def generate_raw_pair(spec: RawPairSpec) -> dict[str, Any]:
     return document
 
 
+def generate_raw_pairs(specs: list[RawPairSpec]) -> dict[str, Any]:
+    """Combine disjoint raw pairs into one process, preserving single-pair output."""
+
+    if not specs:
+        raise ConfigError("at least one raw pair is required")
+    first = specs[0]
+    addresses: set[str] = set()
+    for index, spec in enumerate(specs):
+        for field in ("master_core", "engine", "include_benchmark"):
+            if getattr(spec, field) != getattr(first, field):
+                raise ConfigError(f"pair {index}: {field} must be shared by all pairs")
+        for address in (spec.tx_address, spec.rx_address):
+            if not isinstance(address, str) or not address.strip():
+                raise ConfigError(
+                    f"pair {index}: interface address must be a non-empty string"
+                )
+            normalized = address.strip().lower()
+            if normalized in addresses:
+                raise ConfigError(f"pair {index}: duplicate interface address: {address}")
+            addresses.add(normalized)
+    if len(specs) == 1:
+        return generate_raw_pair(first)
+
+    combined = generate_raw_pair(first)
+    config = combined["daqiri"]["cfg"]
+    config["memory_regions"] = []
+    config["interfaces"] = []
+    if first.include_benchmark:
+        combined["bench_tx"] = []
+        combined["bench_rx"] = []
+    next_flow_id = 1
+    for index, spec in enumerate(specs):
+        document = generate_raw_pair(spec)
+        pair_config = document["daqiri"]["cfg"]
+        prefix = f"pair_{index}_"
+        for region in pair_config["memory_regions"]:
+            region["name"] = prefix + region["name"]
+        for interface in pair_config["interfaces"]:
+            interface["name"] = prefix + interface["name"]
+            for direction in ("tx", "rx"):
+                for queue in interface.get(direction, {}).get("queues", []):
+                    queue["name"] = prefix + queue["name"]
+                    queue["memory_regions"] = [
+                        prefix + name for name in queue["memory_regions"]
+                    ]
+                for flow in interface.get(direction, {}).get("flows", []):
+                    flow["name"] = prefix + flow["name"]
+                    flow["id"] = next_flow_id
+                    next_flow_id += 1
+        config["memory_regions"].extend(pair_config["memory_regions"])
+        config["interfaces"].extend(pair_config["interfaces"])
+        if first.include_benchmark:
+            for key in ("bench_tx", "bench_rx"):
+                for entry in document[key]:
+                    entry["interface_name"] = prefix + entry["interface_name"]
+                combined[key].extend(document[key])
+    return combined
+
+
 def generate_raw_roles(spec: RawPairSpec) -> dict[str, dict[str, Any]]:
     """Split a raw pair into independently runnable TX-only and RX-only documents."""
 

@@ -252,3 +252,48 @@ def test_socket_cli_rejects_inapplicable_transport_options(
     )
     assert result.returncode == 2
     assert error in result.stderr
+
+
+@pytest.mark.parametrize("pair,error", [
+    ('{}', "non-empty JSON object"),
+    ('[]', "non-empty JSON object"),
+    ('{', "invalid --pair"),
+    ('{"tx_address":"a"}', "tx_address and rx_address are required"),
+    ('{"typo":1}', "unknown pair fields"),
+    ('{"tx_address":"a","tx_address":"b"}', "duplicate pair field"),
+    ('{"tx_queue_cores":"1,2"}', "array of CPU indices"),
+    ('{"rx_worker_cores":[true]}', "array of CPU indices"),
+    ('{"eth_src_addr":null}', "non-empty string"),
+])
+def test_raw_pair_cli_rejects_invalid_pair(pair, error):
+    result = subprocess.run([
+        sys.executable, str(REPOSITORY_ROOT / "scripts/gen_daqiri_config.py"),
+        "raw-pair", "--master-core", "0", "--pair", pair,
+    ], capture_output=True, text=True)
+    assert result.returncode == 2
+    assert error in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_raw_pair_cli_combines_pairs_with_shared_defaults():
+    import json
+
+    argv = [sys.executable, str(REPOSITORY_ROOT / "scripts/gen_daqiri_config.py"),
+            "raw-pair", "--master-core", "0", "--engine", "ibverbs",
+            "--tx-queue-cores", "1", "--rx-queue-cores", "2",
+            "--tx-worker-cores", "3", "--rx-worker-cores", "4"]
+    for index in range(2):
+        argv.extend(["--pair", json.dumps({
+            "tx_address": f"000{index}:01:00.0", "rx_address": f"000{index}:01:00.1",
+            "eth_src_addr": "02:00:00:00:00:01", "eth_dst_addr": "02:00:00:00:00:02",
+        })])
+    result = subprocess.run(argv, check=True, capture_output=True, text=True)
+    assert result.stdout == subprocess.run(argv, check=True, capture_output=True, text=True).stdout
+    document = yaml.safe_load(result.stdout)
+    assert len(document["daqiri"]["cfg"]["interfaces"]) == 4
+    assert len(document["bench_tx"]) == len(document["bench_rx"]) == 2
+    production = subprocess.run([*argv, "--daqiri-only"], check=True, capture_output=True, text=True)
+    assert set(yaml.safe_load(production.stdout)) == {"daqiri"}
+    for extra in (["--role", "both"], ["--tx-address", "a"], ["--output-dir", "x"]):
+        invalid = subprocess.run([*argv, *extra], capture_output=True, text=True)
+        assert invalid.returncode == 2
