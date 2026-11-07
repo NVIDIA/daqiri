@@ -1078,6 +1078,8 @@ void set_num_packets(BurstParams *burst, int64_t num);
  * the burst on NO_SPACE_AVAILABLE. Fully direct RDMA instead retains caller
  * ownership on queue-credit exhaustion: poll completions before retrying.
  * Failed direct RDMA posts retain caller ownership on every error status.
+ * MGBE direct TX also retains caller ownership on every error; SUCCESS consumes
+ * its one-packet burst.
  *
  * @param burst Burst structure
  * @return Status indicating result. Valid values are:

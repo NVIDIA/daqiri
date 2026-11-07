@@ -382,12 +382,14 @@ enum class EngineType {
   SOCKET,
   RDMA,
   IBVERBS,  // pure-DevX MPRQ raw-Ethernet engine (stream_type: raw, engine: ibverbs)
+  MGBE,     // Tegra MGBE userspace DMA polling (stream_type: raw, engine: mgbe)
 };
 
 static constexpr const char* DAQIRI_ENGINE_STR__DPDK = "dpdk";
 static constexpr const char* DAQIRI_ENGINE_STR__SOCKET = "socket";
 static constexpr const char* DAQIRI_ENGINE_STR__RDMA = "rdma";
 static constexpr const char* DAQIRI_ENGINE_STR__IBVERBS = "ibverbs";
+static constexpr const char* DAQIRI_ENGINE_STR__MGBE = "mgbe";
 static constexpr const char* DAQIRI_ENGINE_STR__DEFAULT = "default";
 /**
  * @brief Convert string to engine type
@@ -400,6 +402,11 @@ inline EngineType engine_type_from_string(const std::string& str) {
 
   std::string available_engines;
   bool is_known_but_unavailable = false;
+#if DAQIRI_ENGINE_MGBE
+  if (str == DAQIRI_ENGINE_STR__MGBE) return EngineType::MGBE;
+#else
+  if (str == DAQIRI_ENGINE_STR__MGBE) is_known_but_unavailable = true;
+#endif
 
 #if DAQIRI_ENGINE_DPDK
   if (str == DAQIRI_ENGINE_STR__DPDK) return EngineType::DPDK;
@@ -411,6 +418,9 @@ inline EngineType engine_type_from_string(const std::string& str) {
 #if DAQIRI_ENGINE_SOCKET
   if (str == DAQIRI_ENGINE_STR__SOCKET) return EngineType::SOCKET;
   available_engines += std::string(DAQIRI_ENGINE_STR__SOCKET) + " ";
+#if DAQIRI_ENGINE_MGBE
+  available_engines += std::string(DAQIRI_ENGINE_STR__MGBE) + " ";
+#endif
 #else
   if (str == DAQIRI_ENGINE_STR__SOCKET) is_known_but_unavailable = true;
 #endif
@@ -502,6 +512,8 @@ inline std::string engine_type_to_string(EngineType type) {
       return DAQIRI_ENGINE_STR__RDMA;
     case EngineType::IBVERBS:
       return DAQIRI_ENGINE_STR__IBVERBS;
+    case EngineType::MGBE:
+      return DAQIRI_ENGINE_STR__MGBE;
     case EngineType::DEFAULT:
       return DAQIRI_ENGINE_STR__DEFAULT;
   }
@@ -515,6 +527,11 @@ inline EngineType config_engine_from_string(const std::string& str) {
   if (str == DAQIRI_ENGINE_STR__DEFAULT) return EngineType::DEFAULT;
 
   bool is_known_but_unavailable = false;
+#if DAQIRI_ENGINE_MGBE
+  if (str == DAQIRI_ENGINE_STR__MGBE) return EngineType::MGBE;
+#else
+  if (str == DAQIRI_ENGINE_STR__MGBE) is_known_but_unavailable = true;
+#endif
 
 #if DAQIRI_ENGINE_DPDK
   if (str == DAQIRI_ENGINE_STR__DPDK) return EngineType::DPDK;
@@ -538,14 +555,15 @@ inline EngineType config_engine_from_string(const std::string& str) {
   }
 
   if (is_known_but_unavailable) {
-    throw std::invalid_argument(
-        "Engine '" + str + "' is not available in this build. Rebuild with "
-        "-DDAQIRI_ENGINE including '" + str + "' (valid values: dpdk, ibverbs).");
+    throw std::invalid_argument("Engine '" + str +
+                                "' is not available in this build. Rebuild with "
+                                "-DDAQIRI_ENGINE including '" +
+                                str + "' (valid values: dpdk, ibverbs, mgbe).");
   }
 
-  throw std::invalid_argument(
-      "Unknown engine '" + str + "'. Valid options: dpdk, socket, ibverbs, " +
-      DAQIRI_ENGINE_STR__DEFAULT);
+  throw std::invalid_argument("Unknown engine '" + str +
+                              "'. Valid options: dpdk, socket, ibverbs, mgbe, " +
+                              DAQIRI_ENGINE_STR__DEFAULT);
 }
 
 // Stream-aware engine resolution. The user-facing name "ibverbs" maps to two
@@ -593,7 +611,7 @@ inline bool is_explicit_engine_type(EngineType type) {
 inline bool engine_type_supports_stream_type(EngineType type, StreamType stream_type) {
   switch (stream_type) {
     case StreamType::RAW:
-      return type == EngineType::DPDK || type == EngineType::IBVERBS;
+      return type == EngineType::DPDK || type == EngineType::IBVERBS || type == EngineType::MGBE;
     case StreamType::SOCKET:
       return type == EngineType::SOCKET || type == EngineType::RDMA;
     default:

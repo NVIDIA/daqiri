@@ -1,13 +1,52 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+if(TARGET daqiri_mgbe)
+  add_executable(daqiri_mgbe_engine_test mgbe_engine_test.cpp)
+  target_compile_features(daqiri_mgbe_engine_test PRIVATE cxx_std_17)
+  target_include_directories(daqiri_mgbe_engine_test PRIVATE ${PROJECT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/drivers/mgbe/include)
+  target_compile_definitions(daqiri_mgbe_engine_test PRIVATE
+    MGBE_TEST_CONFIG="${PROJECT_SOURCE_DIR}/drivers/mgbe/config/daqiri_mgbe.yaml")
+  target_compile_options(daqiri_mgbe_engine_test PRIVATE -UNDEBUG)
+  if(BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
+    target_link_options(daqiri_mgbe_engine_test PRIVATE "LINKER:--no-as-needed")
+    target_link_libraries(daqiri_mgbe_engine_test PRIVATE daqiri_mgbe daqiri::daqiri)
+  else()
+    target_link_libraries(daqiri_mgbe_engine_test PRIVATE
+      "-Wl,--start-group" daqiri_mgbe daqiri::daqiri daqiri_socket "-Wl,--end-group")
+  endif()
+  add_test(NAME daqiri_mgbe_engine_test COMMAND daqiri_mgbe_engine_test)
+  add_executable(daqiri_mgbe_queue_test ${PROJECT_SOURCE_DIR}/drivers/mgbe/tests/queue_test.cpp
+    ${PROJECT_SOURCE_DIR}/drivers/mgbe/src/mgbe_pmd.cpp)
+  target_compile_features(daqiri_mgbe_queue_test PRIVATE cxx_std_17)
+  target_include_directories(daqiri_mgbe_queue_test PRIVATE ${PROJECT_SOURCE_DIR}/drivers/mgbe/include)
+  target_compile_options(daqiri_mgbe_queue_test PRIVATE -UNDEBUG)
+  add_test(NAME daqiri_mgbe_queue_test COMMAND daqiri_mgbe_queue_test)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME daqiri_mgbe_module_recovery_test COMMAND ${Python3_EXECUTABLE}
+    ${PROJECT_SOURCE_DIR}/drivers/mgbe/tests/module_recovery_test.py)
+  # Requires an explicitly loaded exclusive-port shim; never run via CTest.
+  add_executable(daqiri_mgbe_dma_test ${PROJECT_SOURCE_DIR}/drivers/mgbe/tests/dma_test.cpp)
+  target_compile_features(daqiri_mgbe_dma_test PRIVATE cxx_std_17)
+  target_include_directories(daqiri_mgbe_dma_test PRIVATE ${PROJECT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/drivers/mgbe/include)
+  if(BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
+    target_link_options(daqiri_mgbe_dma_test PRIVATE "LINKER:--no-as-needed")
+    target_link_libraries(daqiri_mgbe_dma_test PRIVATE daqiri_mgbe daqiri::daqiri)
+  else()
+    target_link_libraries(daqiri_mgbe_dma_test PRIVATE
+      "-Wl,--start-group" daqiri_mgbe daqiri::daqiri daqiri_socket "-Wl,--end-group")
+  endif()
+endif()
+
 add_executable(daqiri_init_validation_test daqiri_init_validation_test.cpp)
 target_compile_features(daqiri_init_validation_test PRIVATE cxx_std_17)
 target_include_directories(daqiri_init_validation_test PRIVATE ${PROJECT_SOURCE_DIR})
 
 if(NOT BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
   set(DAQIRI_TEST_STATIC_LIBS daqiri::daqiri)
-  foreach(engine IN ITEMS dpdk socket rdma ibverbs)
+  foreach(engine IN ITEMS dpdk socket rdma ibverbs mgbe)
     if(TARGET daqiri_${engine})
       list(APPEND DAQIRI_TEST_STATIC_LIBS daqiri_${engine})
     endif()

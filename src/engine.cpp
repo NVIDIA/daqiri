@@ -56,6 +56,10 @@
 #include <numaif.h>
 #endif
 
+#if DAQIRI_ENGINE_MGBE
+#include "src/engines/mgbe/daqiri_mgbe_engine.h"
+#endif
+
 namespace daqiri {
 
 TxTimestampId detail::next_tx_timestamp_id() {
@@ -416,6 +420,11 @@ std::unique_ptr<Engine> EngineFactory::create_instance(EngineType type) {
 #if DAQIRI_ENGINE_IBVERBS
     case EngineType::IBVERBS:
       _engine = std::make_unique<IbverbsEngine>();
+      break;
+#endif
+#if DAQIRI_ENGINE_MGBE
+    case EngineType::MGBE:
+      _engine = std::make_unique<MgbeEngine>();
       break;
 #endif
     case EngineType::DEFAULT:
@@ -1214,6 +1223,9 @@ bool validate_queue_memory_regions(const NetworkConfig& config, const CommonQueu
 
 bool validate_network_config(const NetworkConfig& config) {
   bool pass = true;
+#if DAQIRI_ENGINE_MGBE
+  if (config.common_.engine_type == EngineType::MGBE && !validate_mgbe_config(config)) pass = false;
+#endif
   std::set<std::string> mr_names;
   std::set<std::string> q_mr_names;
   std::unordered_set<FlowId> static_rx_flow_ids;
@@ -1259,12 +1271,13 @@ bool validate_network_config(const NetworkConfig& config) {
       if (rxq.poll_mode_ == QueuePollMode::DIRECT) {
         direct_rx_queue_ids.insert(rxq.common_.id_);
         if (!((config.common_.stream_type == StreamType::RAW &&
-               config.common_.engine_type == EngineType::IBVERBS) ||
+               (config.common_.engine_type == EngineType::IBVERBS ||
+                config.common_.engine_type == EngineType::MGBE)) ||
               (config.common_.stream_type == StreamType::SOCKET &&
                config.common_.engine_type == EngineType::RDMA))) {
           DAQIRI_LOG_WARN(
               "RX queue '{}' requests direct polling, which is supported only by the raw "
-              "ibverbs and RDMA engines",
+              "ibverbs, MGBE and RDMA engines",
               rxq.common_.name_);
           pass = false;
         }
@@ -1331,12 +1344,13 @@ bool validate_network_config(const NetworkConfig& config) {
       }
       if (txq.poll_mode_ == QueuePollMode::DIRECT) {
         if (!((config.common_.stream_type == StreamType::RAW &&
-               config.common_.engine_type == EngineType::IBVERBS) ||
+               (config.common_.engine_type == EngineType::IBVERBS ||
+                config.common_.engine_type == EngineType::MGBE)) ||
               (config.common_.stream_type == StreamType::SOCKET &&
                config.common_.engine_type == EngineType::RDMA))) {
           DAQIRI_LOG_WARN(
               "TX queue '{}' requests direct polling, which is supported only by the raw "
-              "ibverbs and RDMA engines",
+              "ibverbs, MGBE and RDMA engines",
               txq.common_.name_);
           pass = false;
         }

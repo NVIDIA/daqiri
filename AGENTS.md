@@ -28,7 +28,7 @@ dependency image for NGC. Publishing that image is managed outside this
 repository.
 
 CMake options (full table in `docs/tutorials/bare-metal-cmake-build.md`):
-- `DAQIRI_ENGINE` — space-separated list of optional engines to compile. Valid values: `dpdk` (raw Ethernet) and `ibverbs` (RDMA/RoCE). Linux sockets (UDP/TCP) are always built in, so there is no `socket` value. Default is `"dpdk ibverbs"`.
+- `DAQIRI_ENGINE` — space-separated list of optional engines to compile. Valid values: `dpdk` (raw Ethernet), `ibverbs` (RDMA/RoCE) and `mgbe` (Tegra MGBE raw Ethernet; see `drivers/mgbe/README.md`). Linux sockets (UDP/TCP) are always built in, so there is no `socket` value. Default is `"dpdk ibverbs"`.
 - `DAQIRI_IBVERBS_DLOPEN` — load raw-ibverbs and RoCE dependency glue DSOs at engine initialization instead of linking the engines to RDMA libraries (default `OFF`). Applies to both static and shared builds; DPDK dependencies are configured separately.
 - `DAQIRI_BUILD_PYTHON` — builds `pybind11` bindings from `python/`.
 - `DAQIRI_BUILD_EXAMPLES` — builds the benchmark executables (default `ON`). The

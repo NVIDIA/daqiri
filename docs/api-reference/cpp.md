@@ -1382,3 +1382,13 @@ All functions that can fail return `daqiri::Status`:
 | `INTERNAL_ERROR` | Internal error in the engine |
 | `RESOURCE_IN_USE` | A queue or memory region still has a live dependency or outstanding ownership |
 | `ALREADY_EXISTS` | A runtime resource already uses the requested name or queue ID |
+
+## Tegra MGBE raw Ethernet
+
+An MGBE-enabled build accepts `stream_type: raw` with `engine: mgbe` and uses
+the same packet/burst functions. One application thread owns direct RX and
+single-packet TX for queue zero. Host buffers belong to the kernel DMA pools;
+free RX bursts explicitly and release canceled TX reservations. Successful
+`send_tx_burst` consumes its metadata; an error retains it for cleanup. Optional
+flow/resource operations, GPU memory, timestamps and scheduling are unsupported.
+See [driver build, installation and configuration](../tutorials/mgbe-driver.md).

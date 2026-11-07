@@ -15,6 +15,27 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 GENERATED_CHECK = REPOSITORY_ROOT / "scripts/check_generated_configs.py"
 CHECKED_IN_CHECK = REPOSITORY_ROOT / "scripts/check_daqiri_configs.py"
 
+
+def test_mgbe_engine_query_and_explicit_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "mgbe_config_validation", REPOSITORY_ROOT / "scripts/config_validation.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    validator, log = fake_validator(tmp_path)
+    monkeypatch.setenv("FAKE_VALIDATOR_ENGINES", "socket mgbe")
+    monkeypatch.setenv("FAKE_VALIDATOR_LOG", str(log))
+    assert module.query_compiled_engines(validator) == frozenset({"socket", "mgbe"})
+    document = {"daqiri": {"cfg": {"stream_type": "raw", "engine": "mgbe"}}}
+    assert module.required_engines(document) == frozenset({"mgbe"})
+    assert module.supports_engines(document, frozenset({"mgbe"}))
+    assert not module.supports_engines(document, frozenset({"ibverbs", "dpdk"}))
+
+
 FAKE_VALIDATOR = """\
 #!/usr/bin/env python3
 import os

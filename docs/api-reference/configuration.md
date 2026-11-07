@@ -56,7 +56,10 @@ These settings apply globally to both TX and RX:
   Mellanox/mlx5 NICs; set `engine: "dpdk"` to use DPDK instead. RoCE configs infer `ibverbs` from
   `roce://` endpoint URIs by default.
   - type: `string`
-  - values: `dpdk`, `socket`, `ibverbs`
+  - values: `dpdk`, `socket`, `ibverbs`, `mgbe`
+  - `mgbe` selects the [Tegra MGBE userspace driver](../tutorials/mgbe-driver.md)
+    for raw Ethernet. It requires an MGBE-enabled build and the matching kernel
+    shim; interfaces use netdev names and direct queues with host DMA pools.
   - Builds with `DAQIRI_IBVERBS_DLOPEN=ON` require the selected raw ibverbs or
     RoCE engine's glue library and compatible system RDMA shared libraries at
     initialization. This is a CMake option; YAML engine selection uses the same

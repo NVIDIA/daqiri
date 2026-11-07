@@ -851,6 +851,11 @@ Status daqiri_init(NetworkConfig& config, const MemoryRegionBindings& bindings) 
     }
   }
 
+  if (config.common_.engine_type == EngineType::MGBE && !bindings.empty()) {
+    DAQIRI_LOG_ERROR("MGBE memory is allocated and DMA-mapped by its kernel control shim");
+    return Status::NOT_SUPPORTED;
+  }
+
   EngineFactory::set_engine_type(config.common_.engine_type);
 
   auto engine = &(EngineFactory::get_active_engine());
@@ -2405,9 +2410,10 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_rx_queue_config(
     }
 
     if (q.poll_mode_ == daqiri::QueuePollMode::DIRECT) {
-      if (_engine_type != daqiri::EngineType::IBVERBS && _engine_type != daqiri::EngineType::RDMA) {
+      if (_engine_type != daqiri::EngineType::IBVERBS && _engine_type != daqiri::EngineType::RDMA &&
+          _engine_type != daqiri::EngineType::MGBE) {
         DAQIRI_LOG_WARN(
-            "RX poll_mode direct is supported only by the raw ibverbs and RDMA engines; "
+            "RX poll_mode direct is supported only by the raw ibverbs, MGBE and RDMA engines; "
             "configured engine is {}",
             daqiri::engine_type_to_string(_engine_type));
         return false;
@@ -2539,9 +2545,10 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_config(
     }
 
     if (q.poll_mode_ == daqiri::QueuePollMode::DIRECT) {
-      if (_engine_type != daqiri::EngineType::IBVERBS && _engine_type != daqiri::EngineType::RDMA) {
+      if (_engine_type != daqiri::EngineType::IBVERBS && _engine_type != daqiri::EngineType::RDMA &&
+          _engine_type != daqiri::EngineType::MGBE) {
         DAQIRI_LOG_WARN(
-            "TX poll_mode direct is supported only by the raw ibverbs and RDMA engines; "
+            "TX poll_mode direct is supported only by the raw ibverbs, MGBE and RDMA engines; "
             "configured engine is {}",
             daqiri::engine_type_to_string(_engine_type));
         return false;

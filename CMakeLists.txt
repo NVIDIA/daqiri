@@ -54,10 +54,17 @@ option(DAQIRI_BUILD_PYTHON "Build Python bindings" OFF)
 option(DAQIRI_BUILD_EXAMPLES "Build standalone examples" ON)
 option(DAQIRI_BUILD_APPLICATIONS "Build example applications (requires TensorRT)" OFF)
 option(DAQIRI_ENABLE_OTEL_METRICS "Enable OpenTelemetry metrics instrumentation" OFF)
-set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs (Linux sockets are always built in)")
+set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs, mgbe (Linux sockets are always built in)")
 
 add_subdirectory(src)
 add_subdirectory(tools)
+
+if(TARGET daqiri_mgbe)
+  install(DIRECTORY drivers/mgbe/
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/daqiri/drivers/mgbe
+    COMPONENT daqiri-cpp
+    PATTERN "__pycache__" EXCLUDE)
+endif()
 
 if(BUILD_TESTING)
   add_subdirectory(tests/cpp)
@@ -178,6 +185,15 @@ foreach(include_dir IN LISTS CUDAToolkit_INCLUDE_DIRS)
   endif()
 endforeach()
 
+# Match the CMake target's engine feature flags for consumers of inline public
+# engine/configuration helpers through pkg-config as well.
+get_target_property(DAQIRI_PC_PUBLIC_DEFINITIONS daqiri_common INTERFACE_COMPILE_DEFINITIONS)
+foreach(definition IN LISTS DAQIRI_PC_PUBLIC_DEFINITIONS)
+  if(definition MATCHES "^DAQIRI_ENGINE_[A-Z_]+=1$")
+    string(APPEND DAQIRI_PC_EXTRA_CFLAGS " -D${definition}")
+  endif()
+endforeach()
+
 set(DAQIRI_PC_LIBS_PRIVATE "-lcudart -lcuda")
 if(CUDAToolkit_LIBRARY_DIR)
   string(PREPEND DAQIRI_PC_LIBS_PRIVATE "-L${CUDAToolkit_LIBRARY_DIR} ")
@@ -195,6 +211,8 @@ if(NOT BUILD_SHARED_LIBS)
       string(APPEND DAQIRI_PC_LIBS_PRIVATE " -ldaqiri_ibverbs -ldaqiri_rdma")
     elseif(engine STREQUAL "dpdk")
       string(APPEND DAQIRI_PC_LIBS_PRIVATE " -ldaqiri_dpdk")
+    elseif(engine STREQUAL "mgbe")
+      string(APPEND DAQIRI_PC_LIBS_PRIVATE " -ldaqiri_mgbe")
     endif()
   endforeach()
   string(APPEND DAQIRI_PC_LIBS_PRIVATE " -ldaqiri_socket -Wl,--end-group")

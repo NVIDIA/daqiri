@@ -276,7 +276,7 @@ need to enable a specific feature or adjust the build for a particular host.
 |---|---|---|
 | `CMAKE_BUILD_TYPE` | n/a | Use `Release` for benchmarks and installed builds. |
 | `BUILD_SHARED_LIBS` | n/a | Use `ON` to produce `libdaqiri.so` and exported package metadata; use `OFF` only when you intentionally need static libraries. |
-| `DAQIRI_ENGINE` | `"dpdk ibverbs"` | Space-separated optional engines to compile. Valid values are `dpdk` and `ibverbs`; Linux UDP/TCP sockets are always built in. Use a smaller set only when packaging a narrower build. |
+| `DAQIRI_ENGINE` | `"dpdk ibverbs"` | Space-separated optional engines to compile. Valid values are `dpdk`, `ibverbs` and `mgbe`; Linux UDP/TCP sockets are always built in. The optional [MGBE driver](mgbe-driver.md) requires a separately built kernel shim. Use a smaller set only when packaging a narrower build. |
 | `DAQIRI_IBVERBS_DLOPEN` | `OFF` | Load the raw ibverbs and RoCE dependencies through versioned glue DSOs at engine initialization. Useful when statically linking DAQIRI while using shared RDMA libraries at runtime. |
 | `DAQIRI_BUILD_EXAMPLES` | `ON` | Builds the `daqiri_bench_*` executables under `build/examples/`. Leave on for smoke tests and benchmark workflows. The `daqiri_config_validate` tool is always built and installed, including when this option is `OFF`. |
 | `DAQIRI_BUILD_APPLICATIONS` | `OFF` | Builds heavier end-to-end examples under `applications/`, currently the TensorRT ResNet inference app. Requires the extra application dependencies. |

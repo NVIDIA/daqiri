@@ -35,6 +35,10 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 
 ## Documentation
 
+The optional [Tegra MGBE userspace driver](drivers/mgbe/README.md) provides CPU
+host-memory raw Ethernet with `engine: mgbe`, including kernel-shim build,
+installation and rollback instructions.
+
 Reference material for the DAQIRI codebase:
 
 - [Getting Started](https://nvidia.github.io/daqiri/getting-started/) — System requirements, build/install instructions, and CMake options

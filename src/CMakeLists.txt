@@ -92,9 +92,9 @@ endif()
 # entirely in src/engines/dpdk and src/engine_dpdk.cpp. daqiri_common and the
 # rdma/ibverbs/socket engines use the libdpdk-free daqiri::Ring / ObjectPool.
 if(NOT DEFINED DAQIRI_ENGINE)
-    set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs (Linux sockets are always built in)")
+    set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs, mgbe (Linux sockets are always built in)")
 endif()
-set_property(CACHE DAQIRI_ENGINE PROPERTY STRINGS "dpdk" "ibverbs")
+set_property(CACHE DAQIRI_ENGINE PROPERTY STRINGS "dpdk" "ibverbs" "mgbe")
 separate_arguments(DAQIRI_ENGINE_LIST UNIX_COMMAND ${DAQIRI_ENGINE})
 list(FIND DAQIRI_ENGINE_LIST "dpdk" _daqiri_dpdk_idx)
 if(_daqiri_dpdk_idx EQUAL -1)
@@ -276,6 +276,7 @@ endif()
 # DAQIRI_ENGINE selects which optional NIC engines are compiled in. Linux
 # sockets (UDP/TCP) are always available, so the socket engine is always built
 # and is NOT a DAQIRI_ENGINE value. Valid values:
+#   mgbe    - raw Ethernet via the Tegra MGBE userspace driver
 #   dpdk    - raw Ethernet via kernel bypass
 #   ibverbs - RDMA/RoCE via libibverbs (also enables the socket RoCE path)
 # DAQIRI_ENGINE / DAQIRI_ENGINE_LIST / DAQIRI_BUILD_DPDK were already parsed above
@@ -295,9 +296,11 @@ foreach(ENGINE IN LISTS DAQIRI_ENGINE_LIST)
     # engine: ibverbs).
     list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "rdma")
     list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "ibverbs")
+  elseif(ENGINE STREQUAL "mgbe")
+    list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "mgbe")
   else()
     message(FATAL_ERROR
-      "Invalid DAQIRI_ENGINE value '${ENGINE}'. Valid values: dpdk, ibverbs. "
+      "Invalid DAQIRI_ENGINE value '${ENGINE}'. Valid values: dpdk, ibverbs, mgbe. "
       "Linux sockets are always built in (there is no 'socket' value); "
       "use 'ibverbs' for RDMA/RoCE.")
   endif()
