@@ -1,7 +1,7 @@
 ---
 name: daqiri-onboarding
 license: Apache-2.0
-description: Guide DAQIRI setup, concepts, configuration generation, validation and repair, and first or resumed benchmarks. Use for diagnosing saved logs or no-free-buffer errors, choosing raw Ethernet versus UDP/TCP or RoCE, and running bounded smoke tests even when the runtime and YAML are already prepared. Also use for explicitly requested available customer demos.
+description: Guide DAQIRI setup, configuration generation, first benchmarks, concept questions, and first-run troubleshooting. Use for getting started, resuming setup, choosing raw Ethernet versus UDP/TCP or RoCE, validating a configuration, or explicitly running an available customer demo.
 ---
 
 # DAQIRI Onboarding
