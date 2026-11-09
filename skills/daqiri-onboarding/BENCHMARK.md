@@ -1,31 +1,127 @@
-# DAQIRI onboarding BYOE
+# Skill Benchmark: daqiri-onboarding
 
-**PASS - self-assessed checklist and activation results.**
+> **Publication eligible**
 
-Evaluated inputs: `b04aa62d95d77e1829e553c2e14e1bc8ca0df73f`. Eight [cases](evals/evals.json), both agents, with/without the skill: 32 fresh sessions, one attempt per condition. Baselines use the same repository, docs, tools, inputs and permissions without the onboarding skill.
+## Publication Recommendation
 
-| Agent | Model | With skill | Baseline | Relevant activation | Negative control |
-|---|---|---:|---:|---:|---|
-| codex | gpt-6.1-sol | 8/8 | 8/8 | 7/7 | inactive |
-| claude | claude-opus-5-5 | 8/8 | 8/8 | 7/7 | inactive |
+- Evaluation source: self-assessed
+- Quality assessment: SELF-ASSESSED
+- Reported execution: completed
+- Reported evaluation verdict: PASS
+- CI checks allow publication with self-assessed evaluation evidence.
+- CI did not run Tier 3. Scores, comparisons, and evaluation verdicts below are producer-reported. Scoring definitions reference Skill Evaluator 1.6.9 and do not set the CI publication gate.
 
-Task scores and baseline comparisons are case-checklist results, not exhaustive answer-accuracy certification.
+Scoring definitions below are those of Skill Evaluator 1.6.9; older reports may use different formulas. Supplied scores are displayed unchanged.
 
-| Agent | Skill | Total tokens | Elapsed seconds |
-|---|---|---:|---:|
-| codex | with | 2,909,913 | 972.8 |
-| codex | without | 2,385,182 | 832.1 |
-| claude | with | 4,644,795 | 678.6 |
-| claude | without | 4,653,239 | 748.8 |
+## Evaluation Metadata
 
-CLI versions: Codex 0.167.0, Claude Code 2.1.319; xhigh effort. A team-run external harness used native discovery, fixed case order, parallel condition workers and serialized hardware tests. Tokens include cached context; elapsed time includes startup and tools.
+- Skill: `daqiri-onboarding`
+- Validation status: `passed`
+- Evaluation date: 2026-11-09
+- Evaluator version: `daqiri-paired-cli-byoe-v4-external-minimal`
+- Agents: Codex (`gpt-6.1-sol`), Claude (`claude-opus-5-5`)
+- Tasks: 8 evaluation tasks (7 positive, 1 negative)
+- Dataset digest: not recorded (legacy or non-live result)
+- Attempts per task: 1
+- Environment: not recorded (legacy or non-live result)
+- Tier 2 evidence: required for publication
+- Tier 3 evidence: self-assessed; CI did not run live evaluation
 
-Hardware coverage is GB10 host-pinned raw ibverbs loopback and paced cross-host TCP. Counts verify delivery, not payload integrity or sustained throughput. Other GPU-memory/DPDK/RoCE hardware paths were not tested. The saved diagnostic log is synthetic; the missing-hardware case passes by correctly reporting a blocker.
+## Tier 1 LLM Provenance
 
-One attempt per case and a controlled skill set do not establish statistical significance or catalog-wide trigger reliability. Raw traces and runner code remain outside the skill. Security/signing remain NVSkills CI responsibilities.
+SkillSpector provider, model, analyzer revision, and determinism evidence retained for this scan.
 
-Current findings:
+| Skill | Provider | Adapter | Analyzer | Model | Revision | Determinism |
+| --- | --- | --- | --- | --- | --- | --- |
+| daqiri-onboarding | nv_inference | openai | mcp_tool_poisoning | `aws/anthropic/bedrock-claude-opus-5-5` | `2.13.4` | nondeterministic / provider_defaults |
+| daqiri-onboarding | nv_inference | openai | semantic_developer_intent | `aws/anthropic/bedrock-claude-opus-5-5` | `2.13.4` | nondeterministic / provider_defaults |
+| daqiri-onboarding | nv_inference | openai | semantic_quality_policy | `aws/anthropic/bedrock-claude-opus-5-5` | `2.13.4` | nondeterministic / provider_defaults |
+| daqiri-onboarding | nv_inference | openai | semantic_security_discovery | `aws/anthropic/bedrock-claude-opus-5-5` | `2.13.4` | nondeterministic / provider_defaults |
+| daqiri-onboarding | nv_inference | openai | meta_analyzer | `aws/anthropic/bedrock-claude-opus-5-5` | `2.13.4` | nondeterministic / provider_defaults |
 
-- claude-with-skill-04-diagnose-log: The answer says the log's 'retains several outstanding bursts' means the pool's spare capacity got used up. The fixture does not quantify retained buffers or identify the exhausted pool; reported retention alone does not prove it exhausted packet-buffer capacity.
-- claude-without-skill-07-raw-smoke: The answer opens with 'Every packet sent on det1 came back ... with no loss' and describes the 4,096 packets not consumed by the application at shutdown as 'not lost'. TX, hardware-loopback and RX-worker packet counts match, with zero selected error/drop increments. This supports no observed NIC count deficit, but does not establish payload identity or fully drained application delivery; the application consumed 4,096 fewer packets.
-- claude-with-skill-07-raw-smoke: The answer says 'every packet sent came back ... nothing was dropped' and 'None were dropped' while disclosing an application count gap of 4,096. Matching TX/loopback/RX-worker counts and zero selected error/drop increments support no observed NIC count deficit. Payload identity and fully drained application delivery were not established; the application consumed 4,096 fewer packets.
+- Controls for `daqiri-onboarding`: temperature=not set (source=provider_default, forwarded=no); seed=not set (source=unset, forwarded=no); reasoning_effort=not set (source=provider_default, forwarded=no)
+
+## What This Report Answers
+
+The three-tier evaluation checks whether the skill:
+
+- is safe to use;
+- produces correct answers;
+- is discovered and activated when needed;
+- helps the agent complete the user's goal and expected workflow; and
+- avoids wasted skill and tool usage.
+
+## Results at a Glance
+
+| Measure | Codex (Baseline → Skill Uplift) | Claude (Baseline → Skill Uplift) |
+|---|---:|---:|
+| Overall | 100.0% → 100.0% (±0.0 points) | 100.0% → 100.0% (±0.0 points) |
+| Security | 100.0% → 100.0% (±0.0 points) | 100.0% → 100.0% (±0.0 points) |
+| Correctness | 100.0% → 100.0% (±0.0 points) | 100.0% → 100.0% (±0.0 points) |
+| Discoverability | 100.0% — baseline ran, but no comparable score was available; uplift unavailable | 100.0% — baseline ran, but no comparable score was available; uplift unavailable |
+| Effectiveness | 100.0% → 100.0% (±0.0 points) | 100.0% → 100.0% (±0.0 points) |
+| Efficiency | Not available | Not available |
+
+**How to read this table:** baseline is the same task attempted without the target skill. Scores are rounded to one decimal; threshold-adjacent values use additional precision so their displayed band matches the verdict. Uplift is derived from those displayed scores and shown in percentage points.
+
+Example: `47.0% → 92.0% (+45.0 points)` means the skill-assisted run scored 92.0%, 45.0 percentage points above its 47.0% no-skill baseline.
+
+A partial dimension was calculated from only the available configured signals; review the detailed report before relying on it.
+
+## Tier Status
+
+| Tier | Purpose | Status | Evidence |
+|---|---|---|---|
+| Tier 1 | Static validation | **PASSED WITH OBSERVATIONS** | 11 validator(s); 13 finding(s) |
+| Tier 2 | Semantic deduplication | **PASSED** | 2 validator(s); 0 finding(s) |
+| Tier 3 | Self-assessed evaluation | **SELF-ASSESSED** | Reported execution: completed; CI did not run Tier 3 |
+
+Tier 3 validation was skipped and executed 0 checks.
+- CI did not run Tier 3; evaluation source: self-assessed.
+
+## Findings and Observations
+
+<details>
+<summary>Show detailed findings and successful checks</summary>
+
+- **MEDIUM** QUALITY/quality_correctness: SKILL_SPEC recommended field missing: 'metadata.author' (`skills/daqiri-onboarding/SKILL.md`)
+- **MEDIUM** QUALITY/quality_correctness: SKILL_SPEC recommended field missing: 'metadata.tags' (`skills/daqiri-onboarding/SKILL.md`)
+- **MEDIUM** QUALITY/quality_efficiency: Deeply nested references in onboarding-flow.md (`skills/daqiri-onboarding/SKILL.md`)
+- **MEDIUM** SCHEMA/body_recommended_section: Missing recommended section: '## Instructions' (`skills/daqiri-onboarding/SKILL.md`)
+- **MEDIUM** SCHEMA/body_recommended_section: Missing recommended section: '## Examples' (`skills/daqiri-onboarding/SKILL.md`)
+- 8 additional finding(s) are available in the full evaluation artifacts.
+
+</details>
+
+## Scoring Methodology
+
+<details>
+<summary>Show dimension definitions, source signals, and thresholds</summary>
+
+| Dimension | Question | Scored signals |
+|---|---|---|
+| Security | Is it safe to use? | `security` (100%) |
+| Correctness | Is the answer correct? | `accuracy` (100%) |
+| Discoverability | Was the right skill loaded when needed? | `skill_execution` (100%) |
+| Effectiveness | Did the skill help complete the task? | `goal_accuracy` (50%) + `behavior_check` (50%) |
+| Efficiency | Did it avoid wasted tool calls and token usage? | `skill_efficiency` (50%) + `token_efficiency` (50%) |
+
+- Dimension bands: PASS at 50% or above; NEUTRAL from 40% to below 50%; FAIL below 40%.
+- Overall Tier 3 lift: PASS at +5 points or more; FAIL at -10 points or less; values between those bands are NEUTRAL.
+- Reference quality rule (not the CI publication gate): PASS only when every configured dimension passes for at least one supported agent. Lift is reported as diagnostic evidence and does not override that reference quality rule.
+- The 100% attempt pass threshold is a separate per-task gate; it is not the dimension pass threshold.
+- Effectiveness is the equal-weight mean of goal completion (`goal_accuracy`) and expected workflow adherence (`behavior_check`).
+- Efficiency is 50% tool-call productivity (the backward-compatible `skill_efficiency` wire id) and 50% `token_efficiency`. Positive-case skill routing is scored under Discoverability, not Efficiency; a negative case without a routing target is N/A. N/A sources are omitted, remaining weights are renormalized, and the dimension is marked partial.
+
+Signals present in this run:
+
+- `assertion_pass_rate` (Assertion Pass Rate): additional evaluator signal.
+- `task_success` (Task Success): additional evaluator signal.
+- `scope_preservation` (Scope Preservation): additional evaluator signal.
+- `skill_activation_alignment` (Skill Activation Alignment): additional evaluator signal.
+
+</details>
+
+## Freshness
+
+Regenerate this benchmark when the skill, evaluation dataset, target agent/model, evaluator version, environment, or scoring policy changes.
