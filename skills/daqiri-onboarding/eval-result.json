@@ -1,0 +1,113 @@
+{
+  "results": [
+    {"validator": "AGENT_EVAL"}
+  ],
+  "tier3": {
+    "schema_version": "2.0",
+    "skill_name": "daqiri-onboarding",
+    "bindings": {"validated_sha": "b04aa62d95d77e1829e553c2e14e1bc8ca0df73f"},
+    "execution_status": "succeeded",
+    "execution_errors": [],
+    "partial": false,
+    "evaluator_version": "daqiri-paired-cli-byoe-v4-external-minimal",
+    "evaluated_at": "2026-11-09T17:33:38.204314+00:00",
+    "dataset_summary": {"total_tasks": 8, "positive_tasks": 7, "negative_tasks": 1, "unclassified_tasks": 0},
+    "agents_run": ["codex", "claude"],
+    "requested_agents": ["codex", "claude"],
+    "metric_ids": ["assertion_pass_rate", "task_success", "scope_preservation", "skill_activation_alignment"],
+    "overall_score": 1,
+    "baseline_overall": 1,
+    "overall_lift": 0,
+    "verdict": "PASS",
+    "attempt_policy": {"max_attempts": 1, "pass_threshold": 1.0, "stop_on_pass": false},
+    "quality_verdict_note": "Producer self-assessment only; no CI publication or security verdict is asserted.",
+    "agents": {
+      "codex": {
+        "name": "codex",
+        "model": "gpt-6.1-sol",
+        "partial": false,
+        "execution_status": "succeeded",
+        "execution_errors": [],
+        "with_skill": 1,
+        "baseline": 1,
+        "lift": 0,
+        "num_trials": 8,
+        "num_trials_baseline": 8,
+        "baseline_ran": true,
+        "dimensions": [
+          {"id": "security", "score": 1, "with_skill": 1, "baseline": 1, "lift": 0, "partial": false, "evaluators": ["scope_preservation"]},
+          {"id": "correctness", "score": 1, "with_skill": 1, "baseline": 1, "lift": 0, "partial": false, "evaluators": ["assertion_pass_rate"]},
+          {"id": "discoverability", "score": 1, "with_skill": 1, "baseline": null, "lift": null, "partial": true, "evaluators": ["skill_activation_alignment"]},
+          {"id": "effectiveness", "score": 1, "with_skill": 1, "baseline": 1, "lift": 0, "partial": false, "evaluators": ["task_success"]},
+          {"id": "efficiency", "score": null, "with_skill": null, "baseline": null, "lift": null, "partial": true, "evaluators": ["measured_resources"]}
+        ],
+        "resources": {
+          "with_skill": {"prompt_tokens": 2871406, "completion_tokens": 38507, "cached_tokens": 2519040, "total_tokens": 2909913, "runtime_seconds": 972.788494348526, "measured_attempts": 8, "missing_attempts": 0},
+          "without_skill": {"prompt_tokens": 2353090, "completion_tokens": 32092, "cached_tokens": 2065920, "total_tokens": 2385182, "runtime_seconds": 832.1475389003754, "measured_attempts": 8, "missing_attempts": 0}
+        },
+        "pass_at_k": {
+          "k": 1,
+          "with_skill": {"total_cases": 8, "passed_cases": 8, "unscored_cases": 0},
+          "baseline": {"total_cases": 8, "passed_cases": 8, "unscored_cases": 0}
+        }
+      },
+      "claude": {
+        "name": "claude",
+        "model": "claude-opus-5-5",
+        "partial": false,
+        "execution_status": "succeeded",
+        "execution_errors": [],
+        "with_skill": 1,
+        "baseline": 1,
+        "lift": 0,
+        "num_trials": 8,
+        "num_trials_baseline": 8,
+        "baseline_ran": true,
+        "dimensions": [
+          {"id": "security", "score": 1, "with_skill": 1, "baseline": 1, "lift": 0, "partial": false, "evaluators": ["scope_preservation"]},
+          {"id": "correctness", "score": 1, "with_skill": 1, "baseline": 1, "lift": 0, "partial": false, "evaluators": ["assertion_pass_rate"]},
+          {"id": "discoverability", "score": 1, "with_skill": 1, "baseline": null, "lift": null, "partial": true, "evaluators": ["skill_activation_alignment"]},
+          {"id": "effectiveness", "score": 1, "with_skill": 1, "baseline": 1, "lift": 0, "partial": false, "evaluators": ["task_success"]},
+          {"id": "efficiency", "score": null, "with_skill": null, "baseline": null, "lift": null, "partial": true, "evaluators": ["measured_resources"]}
+        ],
+        "resources": {
+          "with_skill": {"prompt_tokens": 4577080, "completion_tokens": 67715, "cached_tokens": 4312694, "total_tokens": 4644795, "runtime_seconds": 678.5524678230286, "measured_attempts": 8, "missing_attempts": 0},
+          "without_skill": {"prompt_tokens": 4581227, "completion_tokens": 72012, "cached_tokens": 4323380, "total_tokens": 4653239, "runtime_seconds": 748.8132855892181, "measured_attempts": 8, "missing_attempts": 0}
+        },
+        "pass_at_k": {
+          "k": 1,
+          "with_skill": {"total_cases": 8, "passed_cases": 8, "unscored_cases": 0},
+          "baseline": {"total_cases": 8, "passed_cases": 8, "unscored_cases": 0}
+        }
+      }
+    },
+    "scoring_methodology": {
+      "method": "Self-assessed committed case-assertion checklists; all case assertions must pass.",
+      "comparison": "One fresh session per task/agent/condition; identical repository, docs, runtime, inputs and permissions; baseline omits the skill.",
+      "activation": "Observed SKILL.md read or native Skill invocation, not metadata advertisement alone.",
+      "security": "Scope/fixture preservation only, not a security scan.",
+      "resources": "Actual CLI elapsed time and cached-inclusive token counts; no normalized efficiency score."
+    },
+    "producer_metadata": {"codex_cli": "0.167.0", "claude_cli": "2.1.319", "effort": "xhigh", "dataset_sha256": "0cd88d9527c6eb544bf13dc1f55d00729dbb2d2aad10f429e02da9367aa79e15"},
+    "additional_findings": [
+      {
+        "trial_id": "claude-with-skill-04-diagnose-log",
+        "observation": "The answer says the log's 'retains several outstanding bursts' means the pool's spare capacity got used up.",
+        "correction": "The fixture does not quantify retained buffers or identify the exhausted pool; reported retention alone does not prove it exhausted packet-buffer capacity.",
+        "grading_assessment": "The full answer explicitly treats the exact error/engine/onset as unknown, distinguishes leak, slow consumer and capacity as possibilities, and requests measurements to distinguish them. Assertion3 is met holistically, while this overly definite attribution remains a current finding; checklist success is not exhaustive answer-accuracy certification."
+      },
+      {
+        "trial_id": "claude-without-skill-07-raw-smoke",
+        "observation": "The answer opens with 'Every packet sent on det1 came back ... with no loss' and describes the 4,096 packets not consumed by the application at shutdown as 'not lost'.",
+        "correction": "TX, hardware-loopback and RX-worker packet counts match, with zero selected error/drop increments. This supports no observed NIC count deficit, but does not establish payload identity or fully drained application delivery; the application consumed 4,096 fewer packets.",
+        "grading_assessment": "The response discloses the application count gap, labels HW loopback/host_pinned correctly and explicitly leaves payload/cable/throughput unverified. The committed raw-smoke assertions are met, with absolute losslessness wording retained as a current overstatement."
+      },
+      {
+        "trial_id": "claude-with-skill-07-raw-smoke",
+        "observation": "The answer says 'every packet sent came back ... nothing was dropped' and 'None were dropped' while disclosing an application count gap of 4,096.",
+        "correction": "Matching TX/loopback/RX-worker counts and zero selected error/drop increments support no observed NIC count deficit. Payload identity and fully drained application delivery were not established; the application consumed 4,096 fewer packets.",
+        "grading_assessment": "The response accurately labels internal hardware loopback/host_pinned memory, discloses the application gap, and distinguishes cable/GPU-resident/sustained-throughput claims. The committed raw-smoke assertions are met, while absolute losslessness wording remains a current overstatement."
+      }
+    ]
+  }
+}
