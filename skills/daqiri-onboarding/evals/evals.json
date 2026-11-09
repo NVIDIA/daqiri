@@ -1,0 +1,108 @@
+{
+  "skill_name": "daqiri-onboarding",
+  "evals": [
+    {
+      "id": "01-concept",
+      "prompt": "Explain how DAQIRI moves incoming data into GPU-accessible memory on DGX Spark, and how that differs from a discrete-GPU deployment. I only need an explanation.",
+      "expected_output": "Explain a concept: Use the matching DAQIRI documentation. Explain the GB10 host_pinned shared-memory path accurately. Distinguish the discrete-GPU device-memory path. Do not start setup or a benchmark.",
+      "expected_skill": "daqiri-onboarding",
+      "assertions": [
+        "Use the matching DAQIRI documentation.",
+        "Explain the GB10 host_pinned shared-memory path accurately.",
+        "Distinguish the discrete-GPU device-memory path.",
+        "Do not start setup or a benchmark."
+      ]
+    },
+    {
+      "id": "02-resume-config",
+      "prompt": "I already have this compatible DAQIRI runtime. Generate a raw Ethernet configuration transmitting on det1 and receiving on det2, using the two test ports described in eval-input/context.md, and validate it. Save a new file under results and stop before traffic.",
+      "expected_output": "Resume an existing setup: Reuse the provided compatible runtime. Use observed or supplied topology inputs. Generate a fresh configuration through the existing generator. Run the native validator and report its exit status. Do not start traffic or overwrite inputs.",
+      "expected_skill": "daqiri-onboarding",
+      "assertions": [
+        "Reuse the provided compatible runtime.",
+        "Use observed or supplied topology inputs.",
+        "Generate a fresh configuration through the existing generator.",
+        "Run the native validator and report its exit status.",
+        "Do not start traffic or overwrite inputs."
+      ]
+    },
+    {
+      "id": "03-repair-config",
+      "prompt": "eval-input/invalid-raw.yaml fails DAQIRI validation. Diagnose and fix it in a new file under results without changing the original. Preserve its existing one-port hardware-loopback layout, queue/action mappings and unrelated settings. Stop after validating the corrected file.",
+      "expected_output": "Repair an invalid configuration: Run the native validator and identify the duplicate flow-ID failure. Give both intended flows positive unique IDs. Preserve the one-port hardware-loopback layout, queue IDs, queue-action targets and all unrelated settings. Leave the original fixture unchanged. Validate the corrected copy and report the actual result.",
+      "expected_skill": "daqiri-onboarding",
+      "assertions": [
+        "Run the native validator and identify the duplicate flow-ID failure.",
+        "Give both intended flows positive unique IDs.",
+        "Preserve the one-port hardware-loopback layout, queue IDs, queue-action targets and all unrelated settings.",
+        "Leave the original fixture unchanged.",
+        "Validate the corrected copy and report the actual result."
+      ]
+    },
+    {
+      "id": "04-diagnose-log",
+      "prompt": "The saved run in eval-input/saved-run.log reported no-free-buffer errors. Explain what the evidence shows and what to check next. This is a diagnostic discussion; do not start another benchmark.",
+      "expected_output": "Diagnose saved output: Read the supplied saved log and relevant DAQIRI guidance. Explain buffer ownership and recycling as relevant hypotheses. Separate confirmed observations from unproven root causes. Treat saved evidence as historical, not a fresh run or reliable throughput measurement. Do not start traffic or change host settings.",
+      "expected_skill": "daqiri-onboarding",
+      "assertions": [
+        "Read the supplied saved log and relevant DAQIRI guidance.",
+        "Explain buffer ownership and recycling as relevant hypotheses.",
+        "Separate confirmed observations from unproven root causes.",
+        "Treat saved evidence as historical, not a fresh run or reliable throughput measurement.",
+        "Do not start traffic or change host settings."
+      ]
+    },
+    {
+      "id": "05-missing-hardware",
+      "prompt": "Run my first DAQIRI raw Ethernet benchmark in this runtime. Establish whether its prerequisites are available and report the outcome.",
+      "expected_output": "Handle missing hardware: Inspect usable NIC/runtime prerequisites. Recognize that the isolated runtime has no usable raw/RDMA device. Report the missing prerequisite instead of claiming a hardware benchmark passed. Offer an appropriate next step without substituting a software test as NIC evidence.",
+      "expected_skill": "daqiri-onboarding",
+      "assertions": [
+        "Inspect usable NIC/runtime prerequisites.",
+        "Recognize that the isolated runtime has no usable raw/RDMA device.",
+        "Report the missing prerequisite instead of claiming a hardware benchmark passed.",
+        "Offer an appropriate next step without substituting a software test as NIC evidence."
+      ]
+    },
+    {
+      "id": "06-negative-cuda",
+      "prompt": "Review eval-input/matmul.cu and suggest concrete optimizations for that standalone CUDA matrix-multiplication kernel. Keep the answer focused on CUDA; no execution is needed.",
+      "expected_output": "Stay out of unrelated work: Discuss concrete CUDA memory/coalescing/tiling improvements. Preserve matrix-multiplication semantics. Do not activate DAQIRI onboarding or redirect into DAQIRI setup. Do not start traffic or hardware setup.",
+      "expected_skill": null,
+      "assertions": [
+        "Discuss concrete CUDA memory/coalescing/tiling improvements.",
+        "Preserve matrix-multiplication semantics.",
+        "Do not activate DAQIRI onboarding or redirect into DAQIRI setup.",
+        "Do not start traffic or hardware setup."
+      ]
+    },
+    {
+      "id": "07-raw-smoke",
+      "prompt": "Use the prepared DAQIRI setup and eval-input/raw-hw-loopback.yaml to run a bounded raw Ethernet smoke test. Keep it to one run of at most five seconds, save fresh evidence under results, and explain what the result proves.",
+      "expected_output": "First raw Ethernet run: Validate the concrete configuration before traffic. Execute the actual raw benchmark with a bounded duration. Use fresh application output and relevant counters to establish delivery. Accurately label hardware loopback rather than a cable/wire result. Do not report throughput from packet counts divided by process wall time. Preserve host configuration and input files.",
+      "expected_skill": "daqiri-onboarding",
+      "assertions": [
+        "Validate the concrete configuration before traffic.",
+        "Execute the actual raw benchmark with a bounded duration.",
+        "Use fresh application output and relevant counters to establish delivery.",
+        "Accurately label hardware loopback rather than a cable/wire result.",
+        "Do not report throughput from packet counts divided by process wall time.",
+        "Preserve host configuration and input files."
+      ]
+    },
+    {
+      "id": "08-tcp-wire",
+      "prompt": "Run a bounded DAQIRI TCP smoke test over the prepared cabled path. Use eval-input/tcp-tx.yaml and tcp-rx.yaml. The eval-peer helper controls the dedicated receiver on the peer. Save fresh evidence under results and explain what was verified.",
+      "expected_output": "First TCP run: Verify the route uses the test NIC instead of loopback. Validate the role configurations with the native validator. Start or verify the dedicated receiver before starting the sender. Run the actual TCP client with a bounded duration and pacing. Capture nonzero delivery and physical-interface evidence. Report limitations accurately and stop the owned receiver.",
+      "expected_skill": "daqiri-onboarding",
+      "assertions": [
+        "Verify the route uses the test NIC instead of loopback.",
+        "Validate the role configurations with the native validator.",
+        "Start or verify the dedicated receiver before starting the sender.",
+        "Run the actual TCP client with a bounded duration and pacing.",
+        "Capture nonzero delivery and physical-interface evidence.",
+        "Report limitations accurately and stop the owned receiver."
+      ]
+    }
+  ]
+}
