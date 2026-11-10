@@ -50,5 +50,18 @@ class VendorModuleRecoveryTest(unittest.TestCase):
             self.recover("unrecognized-driver")
 
 
+class SelectedInterfacesTest(unittest.TestCase):
+    def test_single_list_and_all(self):
+        names = {"mgbe0_0", "mgbe1_0", "mgbe2_0", "mgbe3_0"}
+        self.assertEqual(manager.selected_interfaces("mgbe0_0", names), ["mgbe0_0"])
+        self.assertEqual(manager.selected_interfaces("mgbe1_0,mgbe3_0", names), ["mgbe1_0", "mgbe3_0"])
+        self.assertEqual(manager.selected_interfaces("all", names), sorted(names))
+
+    def test_invalid_selection_rejected_before_host_changes(self):
+        for value in ["", "mgbe0_0,", "mgbe0_0,mgbe0_0", "mgbe4_0", "eth0", "all,mgbe0_0"]:
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                manager.selected_interfaces(value, {"mgbe0_0", "mgbe1_0"})
+
+
 if __name__ == "__main__":
     unittest.main()

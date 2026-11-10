@@ -221,15 +221,19 @@ size_t Queue::reclaim() {
   return count;
 }
 
-Device::Device(const std::string& path, uint32_t ring_size, uint32_t mtu) {
+Device::Device(const std::string& path, uint32_t ring_size, uint32_t mtu, uint32_t queue_count) {
   try {
+    if (!queue_count || queue_count > MGBE_PMD_MAX_QUEUES)
+      throw std::invalid_argument("MGBE queue count must be 1..4");
     fd_ = ::open(path.c_str(), O_RDWR | O_CLOEXEC);
     if (fd_ < 0) sysfail("open MGBE control device");
-    mgbe_pmd_config config{MGBE_PMD_ABI, ring_size, mtu, 0};
+    mgbe_pmd_config config{MGBE_PMD_ABI, ring_size, mtu, queue_count};
     if (ioctl(fd_, MGBE_PMD_IOC_CONFIGURE, &config)) sysfail("configure MGBE");
     mgbe_pmd_info info{};
     if (ioctl(fd_, MGBE_PMD_IOC_INFO, &info)) sysfail("query MGBE capabilities");
     if (info.abi != MGBE_PMD_ABI || info.ring_size != ring_size || info.mtu != mtu ||
+        info.queue_count != queue_count || info.max_queues < queue_count ||
+        info.max_queues > MGBE_PMD_MAX_QUEUES || info.channel || info.flags ||
         info.reg_size != 4096 || (info.slot_size != 2048 && info.slot_size != 16384) ||
         ring_size > MGBE_PMD_MAX_RING)
       throw std::runtime_error("incompatible MGBE control ABI");
@@ -244,15 +248,31 @@ Device::Device(const std::string& path, uint32_t ring_size, uint32_t mtu) {
       return p;
     };
     status_ = static_cast<mgbe_pmd_status*>(map(MGBE_PMD_STATUS, page, false));
-    Queue::Mapping m{};
-    m.info = info;
-    m.status = status_;
-    m.rx = static_cast<Descriptor*>(map(MGBE_PMD_RX_RING, ring_size * sizeof(Descriptor)));
-    m.tx = static_cast<Descriptor*>(map(MGBE_PMD_TX_RING, ring_size * sizeof(Descriptor)));
-    m.rx_pool = static_cast<uint8_t*>(map(MGBE_PMD_RX_POOL, size_t(ring_size) * info.slot_size));
-    m.tx_pool = static_cast<uint8_t*>(map(MGBE_PMD_TX_POOL, size_t(ring_size) * info.slot_size));
-    m.regs = static_cast<volatile uint32_t*>(map(MGBE_PMD_REGS, info.reg_size));
-    queue_ = std::make_unique<Queue>(m);
+    auto* regs = static_cast<volatile uint32_t*>(map(MGBE_PMD_REGS, info.reg_size));
+    queues_.reserve(queue_count);
+    for (uint32_t channel = 0; channel < queue_count; ++channel) {
+      mgbe_pmd_info query{};
+      query.abi = MGBE_PMD_ABI;
+      query.channel = channel;
+      if (ioctl(fd_, MGBE_PMD_IOC_QUEUE_INFO, &query)) sysfail("query MGBE queue");
+      if (query.abi != MGBE_PMD_ABI || query.channel != channel ||
+          query.queue_count != queue_count || query.ring_size != ring_size || query.mtu != mtu ||
+          query.slot_size != info.slot_size || query.reg_size != info.reg_size ||
+          query.max_queues != info.max_queues || query.flags)
+        throw std::runtime_error("incompatible MGBE queue ABI");
+      Queue::Mapping m{};
+      m.info = query;
+      m.status = status_;
+      const uint32_t base = channel * MGBE_PMD_REGIONS;
+      m.rx = static_cast<Descriptor*>(map(base + MGBE_PMD_RX_RING, ring_size * sizeof(Descriptor)));
+      m.tx = static_cast<Descriptor*>(map(base + MGBE_PMD_TX_RING, ring_size * sizeof(Descriptor)));
+      m.rx_pool =
+          static_cast<uint8_t*>(map(base + MGBE_PMD_RX_POOL, size_t(ring_size) * info.slot_size));
+      m.tx_pool =
+          static_cast<uint8_t*>(map(base + MGBE_PMD_TX_POOL, size_t(ring_size) * info.slot_size));
+      m.regs = regs;
+      queues_.push_back(std::make_unique<Queue>(m));
+    }
   } catch (...) {
     cleanup();
     throw;
@@ -275,9 +295,17 @@ mgbe_pmd_stats Device::hardware_stats() {
   if (ioctl(fd_, MGBE_PMD_IOC_STATS, &stats)) sysfail("read MGBE hardware statistics");
   return stats;
 }
+mgbe_pmd_rss Device::rss() {
+  mgbe_pmd_rss result{};
+  if (ioctl(fd_, MGBE_PMD_IOC_GET_RSS, &result)) sysfail("read MGBE RSS");
+  return result;
+}
+void Device::configure_rss(const mgbe_pmd_rss& rss) {
+  if (ioctl(fd_, MGBE_PMD_IOC_SET_RSS, &rss)) sysfail("configure MGBE RSS");
+}
 void Device::cleanup() noexcept {
   if (fd_ >= 0) ioctl(fd_, MGBE_PMD_IOC_STOP);
-  queue_.reset();
+  queues_.clear();
   for (auto it = regions_.rbegin(); it != regions_.rend(); ++it) munmap(it->ptr, it->size);
   regions_.clear();
   if (fd_ >= 0) ::close(fd_);

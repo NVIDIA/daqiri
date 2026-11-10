@@ -136,6 +136,14 @@ def restore(path):
     journal(path, data)
 
 
+def selected_interfaces(value, available):
+    selected = sorted(available) if value == "all" else value.split(",")
+    if (not selected or len(set(selected)) != len(selected) or
+            any(not re.fullmatch(r"mgbe[0-3]_0", name) or name not in available for name in selected)):
+        raise RuntimeError("select existing MGBE netdevs separated by commas, or all")
+    return selected
+
+
 def load(module, interface, path, unload_idle_coe):
     if path.exists() and not json.loads(path.read_text()).get("restored"):
         raise RuntimeError("active journal exists; restore it before loading again")
@@ -154,8 +162,7 @@ def load(module, interface, path, unload_idle_coe):
         raise RuntimeError("module has no PMD parameter")
     candidate = run("modinfo", "-F", "srcversion", str(module)).stdout.strip()
     current = ports()
-    if interface not in {p["ifname"] for p in current}:
-        raise RuntimeError("target is not an nvethernet interface")
+    selected = selected_interfaces(interface, {p["ifname"] for p in current})
     for p in current:
         if p.get("addr_info") or "LOWER_UP" in p["flags"]:
             raise RuntimeError(f"refusing to unload configured/live port {p['ifname']}")
@@ -188,16 +195,17 @@ def load(module, interface, path, unload_idle_coe):
         options = ["macsec_enable=" + data["macsec"]]
         options.append("pmd_interface=" + interface)
         run("insmod", str(module.resolve()), *options)
-        node = pathlib.Path("/dev/mgbe-pmd-" + interface)
+        nodes = [pathlib.Path("/dev/mgbe-pmd-" + name) for name in selected]
         for _ in range(50):
-            ready = node.exists()
+            ready = all(node.exists() for node in nodes)
             if ready:
                 break
             time.sleep(0.1)
         else:
             raise RuntimeError("replacement device was not created")
-        run("ip", "link", "set", interface, "down")
-        print(node)
+        for name, node in zip(selected, nodes):
+            run("ip", "link", "set", name, "down")
+            print(node)
     except BaseException:
         restore(path)
         raise
@@ -209,7 +217,8 @@ def main():
     sub.add_parser("inspect")
     l = sub.add_parser("load")
     l.add_argument("--module", type=pathlib.Path, required=True)
-    l.add_argument("--interface", default="mgbe0_0")
+    l.add_argument("--interface", default="mgbe0_0",
+                   help="MGBE netdevs separated by commas, or all")
     l.add_argument("--state", type=pathlib.Path, required=True)
     l.add_argument("--unload-idle-coe", action="store_true")
     r = sub.add_parser("restore")

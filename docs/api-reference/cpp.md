@@ -1386,10 +1386,14 @@ All functions that can fail return `daqiri::Status`:
 ## Tegra MGBE raw Ethernet
 
 An MGBE-enabled build accepts `stream_type: raw` with `engine: mgbe` and uses
-the same packet/burst functions. One application thread owns direct operations;
+the same packet/burst functions. One application thread owns each direct queue direction;
 direct TX sends one packet per call. Indirect queues use pinned workers and
 accept TX bursts of 1..64 packets, up to the configured `batch_size`. Modes may
-differ by direction; both use the same hardware queue pair, ID zero.
+differ by direction. Each interface supports 1..4 queue pairs with IDs `0..N-1`,
+and an engine can acquire up to four interfaces. Set port/queue IDs before
+reserving TX packets; bound bursts cannot be redirected by changing their header.
+RX metadata preserves the actual port/queue. Hardware RSS distributes IPv4
+UDP/TCP flows; unhashed traffic uses queue zero.
 Host buffers belong to the kernel DMA pools;
 free RX bursts explicitly and release canceled TX reservations. Successful
 `send_tx_burst` transfers burst ownership to the engine; an error retains it for

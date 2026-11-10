@@ -1,7 +1,7 @@
 # Tegra MGBE userspace driver
 
-This experimental driver gives DAQIRI exclusive ownership of one Tegra MGBE
-port. NVIDIA's `nvethernet` kernel driver retains clock, reset, PHY, MAC and
+This experimental driver gives DAQIRI exclusive ownership of selected Tegra MGBE
+ports. NVIDIA's `nvethernet` kernel driver retains clock, reset, PHY, MAC and
 IOMMU setup. An opt-in control shim allocates coherent host-memory DMA pools
 and maps descriptor rings, packet buffers and DMA doorbells into userspace.
 The userspace driver polls those rings with ARM DMA/MMIO barriers; data
@@ -19,20 +19,26 @@ remain unchanged; select MGBE explicitly.
   `ACEB0B6366A461508EE22A8` and Linux
   `6.8.0-202601282310-nvidia-tegra-ppadev-rt`. Other releases require a matching
   source port and renewed DMA/lifecycle validation; the builder rejects them.
-- One exclusive interface, one RX/TX queue pair, queue ID zero. `address` is
-  its Linux netdev name (`mgbe0_0` through `mgbe3_0`), not a PCI address.
+- One through four exclusive interfaces, with one through four RX/TX queue
+  pairs on each. Queue IDs must be unique and contiguous from zero in both
+  directions. `address` is the Linux netdev name (`mgbe0_0` through `mgbe3_0`),
+  not a PCI address. The kernel advertises the ordinary DT DMA channels it can
+  expose and rejects larger requests; camera/VM channels are excluded.
 - Each direction supports `poll_mode: direct` or `poll_mode: indirect`, including
-  mixed modes. Direct operations use one application thread for the port; pin
-  that thread to the desired CPU. Direct queues omit `cpu_core`, `batch_size`
+  mixed modes. One application thread owns each direct queue direction; separate
+  queues and directions may use separate threads. Pin application threads to
+  their intended CPUs. Direct queues omit `cpu_core`, `batch_size`
   and `timeout_us` and create no worker for that direction.
 - Indirect queues require `cpu_core` and `batch_size` (1..64). Pinned pollers
   service DMA, with bounded preallocated handoff rings between pollers and
-  application threads. RX and TX sharing a core use one worker; different cores
-  use separate workers. Applications may pass distinct bursts between threads;
+  application threads. All indirect queues assigned to the same core share one
+  worker, including queues on different interfaces; different cores use
+  separate workers. Each queue has its own polling budget and bounded backlog. Applications may pass distinct bursts between threads;
   each burst must have only one application owner at a time. Shutdown requires
   application threads to stop using the engine first.
-- Two distinct `kind: host`, DAQIRI-owned memory regions: one per direction,
-  with equal `num_bufs` and `buf_size`. Pools are allocated by the kernel shim,
+- Two distinct `kind: host`, DAQIRI-owned memory regions per queue pair: one
+  per direction, never shared between queues or ports. All regions on a port
+  must have equal `num_bufs` and `buf_size`; different ports may differ. Pools are allocated by the kernel shim,
   rather than by the generic userspace host allocator. External bindings,
   GPU/host-pinned/huge memory and physical header/data splits are rejected.
 - `num_bufs` sets the hardware ring size: a power of two from 64 through 4096.
@@ -53,7 +59,10 @@ remain unchanged; select MGBE explicitly.
   hardware ring, which can eventually drop new arrivals.
 - No flow steering, flow isolation, reorder, pacing, accurate send, hardware
   timestamps, offloads or internal-loopback mode through this engine. All
-  traffic delivered by the MAC enters queue zero; the application filters it.
+  IPv4 UDP/TCP flows are distributed across the enabled RX queues by hardware
+  RSS, with a per-port key and a balanced 128-entry table. Packets without an
+  applicable hash enter queue zero. One flow stays on one queue; several flows
+  are needed to spread receive work over cores. Applications filter traffic.
   Unsupported configuration fails the native validator before hardware opens.
 
 Raw Ethernet frames are exposed directly, with no IP address assigned to Linux.
@@ -98,11 +107,46 @@ packet before `send_tx_burst()`. `wait_for_tx_idle()` drains queued and posted
 sends; it returns `RESOURCE_IN_USE` while the application holds unsubmitted TX
 buffers. Link/session faults fail operations and require shutdown/restart.
 
-Indirect mode separates application work from polling. It still uses **one
-hardware RX/TX queue pair**, with no RSS or additional queue IDs. Multi-queue
-support needs changes to the kernel shim, control ABI and userspace driver.
-Throughput gains depend on frame size, batching and CPU placement and must be
-measured on the target system.
+## Multiple queues and interfaces
+
+[`config/daqiri_mgbe_4q.yaml`](config/daqiri_mgbe_4q.yaml) enables RX/TX queue
+pairs 0..3 on `mgbe0_0`, with workers on CPUs 8..11. Add interface blocks for
+other MGBE ports, using distinct memory regions for every queue direction.
+Interfaces receive DAQIRI port IDs in configuration order. Set the desired
+port and queue in the TX burst header before reserving packet buffers, and
+poll RX using that same `(port_id, queue_id)` API addressing. RX metadata
+identifies the actual interface and queue. A burst bound to one queue cannot
+be submitted on another by changing its header.
+
+`rx_meta_buffers` sizes each RX queue's metadata pool; TX metadata is a shared
+pool of `tx_meta_buffers` leases, assigned to a queue when packets are reserved.
+Hardware rings, packet slots, RX handoffs, TX pending lists and completion
+recycling are independent per queue. Held RX buffers or TX exhaustion on one
+queue do not consume another queue's DMA slots. `wait_for_tx_idle()` drains all
+queues; stop new submissions first. A link or DMA fault stops every DMA channel
+on that port and invalidates the DAQIRI session, which requires shutdown/restart.
+
+The control shim and userspace driver must both use **control ABI v2**. Rebuild
+and reload the matching module and rebuild applications using the low-level
+C++ driver. ABI v1 configure requests are rejected before DMA allocation. The
+low-level `Device` accepts a queue count and exposes `queue(id)`; RSS key/table
+queries and updates are available before start. DAQIRI uses the default hardware
+RSS distribution; user-supplied flow rules remain unsupported.
+
+To expose multiple ports, pass a comma-separated netdev list or `all` to the
+module manager's `--interface` option. Acquisition remains exclusive per port,
+and the existing guards still refuse module replacement while any MGBE port is
+live/configured or a dependency is active. For example, after quiescing ports:
+
+```bash
+drivers/mgbe/container.sh --root python3 drivers/mgbe/manage_module.py load \
+  --module "$PWD/build/mgbe-kernel-v2/nvethernet/nvethernet.ko" \
+  --interface all --state "$PWD/build/mgbe-module.json" --unload-idle-coe
+```
+
+Multiple queues share their port's physical bandwidth. Throughput gains depend
+on frame size, batching, flow distribution and CPU placement and must be measured
+on the target system.
 
 ## Build and install DAQIRI
 
@@ -150,10 +194,10 @@ git -C /tmp/tegra-oot rev-parse HEAD
 # Install the running kernel's headers and IGX OOT headers first. The builder
 # uses /lib/modules/$(uname -r)/build and the matching OOT Module.symvers.
 drivers/mgbe/container.sh bash drivers/mgbe/build-kernel.sh \
-  /tmp/tegra-oot build/mgbe-kernel patched
+  /tmp/tegra-oot build/mgbe-kernel-v2 patched
 
 sudo install -d /opt/daqiri/lib/modules/"$(uname -r)"
-sudo install -m 0644 build/mgbe-kernel/nvethernet/nvethernet.ko \
+sudo install -m 0644 build/mgbe-kernel-v2/nvethernet/nvethernet.ko \
   /opt/daqiri/lib/modules/"$(uname -r)"/nvethernet.ko
 ```
 
@@ -187,7 +231,7 @@ drivers/mgbe/container.sh --root python3 drivers/mgbe/manage_module.py load \
 ```
 
 If using the container, bind-mount `/opt/daqiri` to load the installed artifact,
-or use `--module "$PWD/build/mgbe-kernel/nvethernet/nvethernet.ko"` directly.
+or use `--module "$PWD/build/mgbe-kernel-v2/nvethernet/nvethernet.ko"` directly.
 The control node is `/dev/mgbe-pmd-mgbe0_0`, mode 0600. Leave the selected
 kernel netdev down. Configure a compatible cabled peer and establish carrier;
 the application waits briefly for PHY training and refuses to start without it.
@@ -239,7 +283,9 @@ For cable-free DMA correctness validation, explicitly load the shim and run
 (default worker CPU: 8). This standalone
 hardware test enables internal MAC loopback through a test-only port adapter,
 checks changing payloads across small/standard/jumbo frames and ring wraparound
-in direct, indirect and mixed modes, including 32-packet TX batches,
+in direct, indirect and mixed modes, including 32-packet TX batches. With a
+multi-queue config, it tests each TX channel against every RX queue using
+controlled RSS tables,
 then closes each session. It is never registered with CTest, produces no
 performance measurements, and does not establish cable/peer delivery. The
 production `mgbe` engine continues to require carrier.
@@ -248,3 +294,9 @@ An intermittent first-frame RX visibility failure has been observed in cabled
 runs on isolated cores. Its cause remains unresolved. A passing DMA or sustained
 traffic test does not establish reliable cold startup; verify first-frame payload
 integrity and timeout handling for the deployment as well.
+
+Simultaneous four-interface MAC-loopback stress has also observed an early
+packet loss alongside a MAC RX CRC counter increment. The full multi-port stress
+matrix did not complete without errors; its cause is unresolved. Four-queue
+single-port DMA and cabled delivery checks do not qualify sustained multi-port
+operation or cold-start reliability.

@@ -1,0 +1,119 @@
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: raw
+    engine: mgbe
+    master_core: 0
+    log_level: info
+    tx_meta_buffers: 64
+    rx_meta_buffers: 64
+    memory_regions:
+    - name: RX0
+      kind: host
+      affinity: 0
+      num_bufs: 1024
+      buf_size: 1514
+    - name: RX1
+      kind: host
+      affinity: 0
+      num_bufs: 1024
+      buf_size: 1514
+    - name: RX2
+      kind: host
+      affinity: 0
+      num_bufs: 1024
+      buf_size: 1514
+    - name: RX3
+      kind: host
+      affinity: 0
+      num_bufs: 1024
+      buf_size: 1514
+    - name: TX0
+      kind: host
+      affinity: 0
+      num_bufs: 1024
+      buf_size: 1514
+    - name: TX1
+      kind: host
+      affinity: 0
+      num_bufs: 1024
+      buf_size: 1514
+    - name: TX2
+      kind: host
+      affinity: 0
+      num_bufs: 1024
+      buf_size: 1514
+    - name: TX3
+      kind: host
+      affinity: 0
+      num_bufs: 1024
+      buf_size: 1514
+    interfaces:
+    - name: mgbe
+      address: mgbe0_0
+      rx:
+        queues:
+        - name: RX0
+          id: 0
+          poll_mode: indirect
+          cpu_core: 8
+          batch_size: 32
+          memory_regions:
+          - RX0
+          timeout_us: 100
+        - name: RX1
+          id: 1
+          poll_mode: indirect
+          cpu_core: 9
+          batch_size: 32
+          memory_regions:
+          - RX1
+          timeout_us: 100
+        - name: RX2
+          id: 2
+          poll_mode: indirect
+          cpu_core: 10
+          batch_size: 32
+          memory_regions:
+          - RX2
+          timeout_us: 100
+        - name: RX3
+          id: 3
+          poll_mode: indirect
+          cpu_core: 11
+          batch_size: 32
+          memory_regions:
+          - RX3
+          timeout_us: 100
+      tx:
+        queues:
+        - name: TX0
+          id: 0
+          poll_mode: indirect
+          cpu_core: 8
+          batch_size: 32
+          memory_regions:
+          - TX0
+        - name: TX1
+          id: 1
+          poll_mode: indirect
+          cpu_core: 9
+          batch_size: 32
+          memory_regions:
+          - TX1
+        - name: TX2
+          id: 2
+          poll_mode: indirect
+          cpu_core: 10
+          batch_size: 32
+          memory_regions:
+          - TX2
+        - name: TX3
+          id: 3
+          poll_mode: indirect
+          cpu_core: 11
+          batch_size: 32
+          memory_regions:
+          - TX3

@@ -58,7 +58,8 @@ class FakePort : public MgbePort {
   ~FakePort() override {
     ++f_.closed;
   }
-  mgbe::Queue& queue() override {
+  mgbe::Queue& queue(uint32_t id = 0) override {
+    if (id) throw std::out_of_range("mock queue");
     return queue_;
   }
   void start() override {
@@ -74,8 +75,9 @@ class TestEngine : public MgbeEngine {
   explicit TestEngine(Fixture& f) : f_(f) {}
 
  protected:
-  std::unique_ptr<MgbePort> open_port(const std::string&, uint32_t ring, uint32_t mtu) override {
-    assert(ring == 64 && mtu == 1500);
+  std::unique_ptr<MgbePort> open_port(const std::string&, uint32_t ring, uint32_t mtu,
+                                      uint32_t queues) override {
+    assert(ring == 64 && mtu == 1500 && queues == 1);
     return std::make_unique<FakePort>(f_);
   }
 
@@ -436,6 +438,229 @@ void concurrent_indirect_tx() {
   assert(checked == senders * bursts * batch);
   engine.shutdown();
 }
+struct MultiFixture {
+  std::array<std::array<std::unique_ptr<Fixture>, 4>, 4> ports;
+  std::array<int, 4> opened{}, closed{};
+  bool fail_second_start = false;
+  MultiFixture() {
+    for (size_t p = 0; p < 4; ++p)
+      for (size_t q = 0; q < 4; ++q) {
+        ports[p][q] = std::make_unique<Fixture>();
+        auto& info = ports[p][q]->info;
+        info.channel = q;
+        info.queue_count = 4;
+        info.max_queues = 4;
+        info.mac[5] = 7 + p;
+        info.rx_tail_offset += q * 0x80;
+        info.tx_tail_offset += q * 0x80;
+        info.rx_completed_offset += q * 0x80;
+      }
+  }
+};
+class MultiPort final : public MgbePort {
+ public:
+  MultiPort(MultiFixture& f, size_t port, size_t count) : fixture_(f), port_(port) {
+    ++f.opened[port];
+    for (size_t q = 0; q < count; ++q)
+      queues_.push_back(std::make_unique<mgbe::Queue>(f.ports[port][q]->mapping()));
+  }
+  ~MultiPort() override {
+    ++fixture_.closed[port_];
+  }
+  mgbe::Queue& queue(uint32_t id = 0) override {
+    return *queues_.at(id);
+  }
+  void start() override {
+    if (port_ == 1 && fixture_.fail_second_start)
+      throw std::runtime_error("second port link failed");
+  }
+
+ private:
+  MultiFixture& fixture_;
+  size_t port_;
+  std::vector<std::unique_ptr<mgbe::Queue>> queues_;
+};
+class MultiEngine final : public MgbeEngine {
+ public:
+  explicit MultiEngine(MultiFixture& f) : fixture_(f) {}
+
+ protected:
+  std::unique_ptr<MgbePort> open_port(const std::string& name, uint32_t ring, uint32_t mtu,
+                                      uint32_t count) override {
+    assert(ring == 64 && mtu == 1500 && count == 4);
+    return std::make_unique<MultiPort>(fixture_, name[4] - '0', count);
+  }
+
+ private:
+  MultiFixture& fixture_;
+};
+NetworkConfig multiple(bool indirect_mode, size_t ports = 2) {
+  auto cfg = indirect_mode ? indirect() : config();
+  const auto model = cfg.ifs_[0];
+  const auto rx_mr = cfg.mrs_.at("RX"), tx_mr = cfg.mrs_.at("TX");
+  cfg.ifs_.clear();
+  cfg.mrs_.clear();
+  cfg.tx_meta_buffers_ = 16;
+  auto cores = cpus();
+  for (size_t p = 0; p < ports; ++p) {
+    auto port = model;
+    port.name_ = "port" + std::to_string(p);
+    port.address_ = "mgbe" + std::to_string(p) + "_0";
+    port.rx_.queues_.clear();
+    port.tx_.queues_.clear();
+    for (size_t q = 0; q < 4; ++q) {
+      auto rx = model.rx_.queues_[0];
+      auto tx = model.tx_.queues_[0];
+      rx.common_.id_ = tx.common_.id_ = q;
+      rx.common_.name_ = "rx" + std::to_string(q);
+      tx.common_.name_ = "tx" + std::to_string(q);
+      if (indirect_mode)
+        rx.common_.cpu_core_ = tx.common_.cpu_core_ = std::to_string(cores[q % cores.size()]);
+      auto r = rx_mr, t = tx_mr;
+      r.name_ = "p" + std::to_string(p) + "q" + std::to_string(q) + "rx";
+      t.name_ = "p" + std::to_string(p) + "q" + std::to_string(q) + "tx";
+      rx.common_.mrs_ = {r.name_};
+      tx.common_.mrs_ = {t.name_};
+      cfg.mrs_[r.name_] = r;
+      cfg.mrs_[t.name_] = t;
+      port.rx_.queues_.push_back(rx);
+      port.tx_.queues_.push_back(tx);
+    }
+    cfg.ifs_.push_back(port);
+  }
+  assert(validate_network_config(cfg));
+  return cfg;
+}
+void multiple_direct_owners() {
+  MultiFixture fixture;
+  MultiEngine engine(fixture);
+  assert(engine.set_config_and_initialize(multiple(false)));
+  std::vector<std::thread> owners;
+  for (int p = 0; p < 2; ++p)
+    for (int q = 0; q < 4; ++q) {
+      owners.emplace_back([&, p, q] {
+        auto& f = *fixture.ports[p][q];
+        for (size_t seq = 0; seq < 128; ++seq) {
+          BurstParams* tx = nullptr;
+          until([&] {
+            tx = engine.create_tx_burst_params();
+            return tx;
+          });
+          set_header(tx, p, q, 1, 1);
+          assert(engine.get_tx_packet_burst(tx) == Status::SUCCESS);
+          assert(engine.set_packet_lengths(tx, 0, {60}) == Status::SUCCESS);
+          assert(engine.get_packet_ptr(tx, 0) == f.tx_pool.data() + seq % 64 * 2048);
+          assert(engine.send_tx_burst(tx) == Status::SUCCESS);
+          assert(flags(f.tx[seq % 64]) & own);
+          complete(f.tx[seq % 64]);
+          f.receive(seq % 64);
+          BurstParams* rx = nullptr;
+          assert(engine.get_rx_burst(&rx, p, q) == Status::SUCCESS);
+          assert(rx->hdr.hdr.port_id == p && rx->hdr.hdr.q_id == q);
+          assert(engine.get_packet_ptr(rx, 0) == f.rx_pool.data() + seq % 64 * 2048);
+          engine.free_rx_burst(rx);
+        }
+      });
+    }
+  for (auto& thread : owners) thread.join();
+  // The main thread drains completed direct queues after their owners exit.
+  assert(engine.wait_for_tx_idle(1000) == Status::SUCCESS);
+  engine.shutdown();
+  assert(fixture.closed[0] == 1 && fixture.closed[1] == 1);
+}
+void multiple_indirect_queues() {
+  MultiFixture fixture;
+  MultiEngine engine(fixture);
+  assert(engine.set_config_and_initialize(multiple(true)));
+  std::array<BurstParams*, 2> held{};
+  for (int repeat = 0; repeat < 2; ++repeat) {
+    for (int p = 0; p < 2; ++p)
+      for (int q = 0; q < 4; ++q) {
+        auto& f = *fixture.ports[p][q];
+        for (size_t i = repeat * 4; i < size_t(repeat * 4 + 4); ++i) f.receive(i);
+        BurstParams* rx = nullptr;
+        until([&] { return engine.get_rx_burst(&rx, p, q) == Status::SUCCESS; });
+        assert(rx->hdr.hdr.port_id == p && rx->hdr.hdr.q_id == q && rx->hdr.hdr.num_pkts == 4);
+        if (!p && !q)
+          held[repeat] = rx;
+        else
+          engine.free_rx_burst(rx);
+        auto* tx = engine.create_tx_burst_params();
+        assert(tx);
+        set_header(tx, p, q, 8, 1);
+        assert(engine.get_tx_packet_burst(tx) == Status::SUCCESS);
+        const int original = tx->hdr.hdr.q_id;
+        tx->hdr.hdr.q_id = (original + 1) % 4;
+        assert(engine.send_tx_burst(tx) == Status::INVALID_PARAMETER);
+        tx->hdr.hdr.q_id = original;
+        for (int i = 0; i < 8; ++i)
+          assert(engine.set_packet_lengths(tx, i, {60}) == Status::SUCCESS);
+        assert(engine.send_tx_burst(tx) == Status::SUCCESS);
+        until([&] { return flags(f.tx[repeat * 8 + 7]) & own; });
+        for (int i = repeat * 8; i < repeat * 8 + 8; ++i) complete(f.tx[i]);
+      }
+  }
+  // Exhausted queue-zero RX metadata has not stopped the seven other queues.
+  assert(!(flags(fixture.ports[0][0]->rx[7]) & own));
+  engine.free_rx_burst(held[1]);
+  assert(!(flags(fixture.ports[0][0]->rx[4]) & own));
+  engine.free_rx_burst(held[0]);
+  until([&] { return flags(fixture.ports[0][0]->rx[7]) & own; });
+  assert(engine.wait_for_tx_idle(3000) == Status::SUCCESS);
+  // A full SQ and exhausted payload pool on one channel do not block another.
+  auto* full = engine.create_tx_burst_params();
+  assert(full);
+  set_header(full, 0, 0, 64, 1);
+  assert(engine.get_tx_packet_burst(full) == Status::SUCCESS);
+  for (int i = 0; i < 64; ++i) assert(engine.set_packet_lengths(full, i, {60}) == Status::SUCCESS);
+  assert(engine.send_tx_burst(full) == Status::SUCCESS);
+  auto& blocked = *fixture.ports[0][0];
+  until([&] { return flags(blocked.tx[14]) & own; });
+  auto* unavailable = engine.create_tx_burst_params();
+  assert(unavailable);
+  set_header(unavailable, 0, 0, 1, 1);
+  assert(engine.get_tx_packet_burst(unavailable) == Status::NO_FREE_PACKET_BUFFERS);
+  engine.free_tx_burst(unavailable);
+  auto* other = engine.create_tx_burst_params();
+  assert(other);
+  set_header(other, 0, 1, 1, 1);
+  assert(engine.get_tx_packet_burst(other) == Status::SUCCESS);
+  assert(engine.set_packet_lengths(other, 0, {60}) == Status::SUCCESS);
+  assert(engine.send_tx_burst(other) == Status::SUCCESS);
+  auto& progressing = *fixture.ports[0][1];
+  until([&] { return flags(progressing.tx[16]) & own; });
+  complete(progressing.tx[16]);
+  assert(engine.wait_for_tx_idle(0) == Status::NOT_READY);
+  for (size_t i = 16; i < 79; ++i) complete(blocked.tx[i % 64]);
+  until([&] { return flags(blocked.tx[15]) & own; });
+  complete(blocked.tx[15]);
+  assert(engine.wait_for_tx_idle(3000) == Status::SUCCESS);
+  engine.shutdown();
+  fixture.fail_second_start = true;
+  assert(!engine.set_config_and_initialize(multiple(true)));
+  assert(fixture.opened == fixture.closed);
+}
+void multiple_validation() {
+  const std::function<void(NetworkConfig&)> invalid[] = {
+      [](auto& c) { c.ifs_[0].rx_.queues_[1].common_.id_ = 0; },
+      [](auto& c) { c.ifs_[0].tx_.queues_[3].common_.id_ = 4; },
+      [](auto& c) { c.ifs_[0].tx_.queues_.pop_back(); },
+      [](auto& c) { c.ifs_[1].address_ = c.ifs_[0].address_; },
+      [](auto& c) { c.mrs_.at("p0q1rx").num_bufs_ = 128; },
+      [](auto& c) {
+        c.ifs_[0].rx_.queues_[1].common_.mrs_ = c.ifs_[0].rx_.queues_[0].common_.mrs_;
+      },
+      [](auto& c) { c.ifs_[1].tx_.queues_[1].common_.cpu_core_ = "1junk"; },
+  };
+  for (const auto& change : invalid) {
+    auto cfg = multiple(true);
+    change(cfg);
+    MultiFixture f;
+    MultiEngine engine(f);
+    assert(!engine.set_config_and_initialize(cfg));
+    for (auto n : f.opened) assert(!n);
+  }
+}
 void worker_fault_and_affinity_failure() {
   Fixture f;
   TestEngine engine(f);
@@ -481,4 +706,7 @@ int main() {
   indirect_tx(true);
   concurrent_indirect_tx();
   worker_fault_and_affinity_failure();
+  multiple_validation();
+  multiple_direct_owners();
+  multiple_indirect_queues();
 }

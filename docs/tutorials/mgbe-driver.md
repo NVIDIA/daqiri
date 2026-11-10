@@ -3,7 +3,7 @@
 DAQIRI's optional `mgbe` engine exposes the custom Tegra MGBE DMA polling
 driver through the normal raw-Ethernet packet API. Its kernel control shim
 retains NVIDIA's hardware setup, allocates coherent host buffers and gives one
-application exclusive access to one RX/TX queue pair. The userspace path polls
+application exclusive access to up to four RX/TX queue pairs per port. The userspace path polls
 descriptors and returns buffers explicitly; it does not use DPDK or AF_XDP.
 
 The initial implementation targets the pinned IGX Thor kernel/driver package
@@ -66,8 +66,23 @@ ownership to the engine, and TX buffers are reused only after completion.
 Application threads may own different bursts concurrently; each burst must have
 one owner at a time. Stop application threads before shutdown.
 
-Both modes still expose **one hardware RX/TX queue pair, ID 0**, with no RSS.
-The complete indirect sample is `drivers/mgbe/config/daqiri_mgbe_indirect.yaml`.
+Both modes support **up to four hardware RX/TX queue pairs per interface**,
+with IDs `0..N-1` and matching RX/TX queue sets. One application may own up to
+four interfaces. Each queue direction uses a distinct host memory region;
+all regions on one port must have equal ring sizes and frame capacities.
+Hardware RSS distributes IPv4 UDP/TCP flows across the enabled RX queues;
+unhashed traffic uses queue zero. A single flow stays on one queue.
+
+The complete indirect sample is `drivers/mgbe/config/daqiri_mgbe_indirect.yaml`;
+`drivers/mgbe/config/daqiri_mgbe_4q.yaml` enables four queue pairs. Workers sharing
+a `cpu_core` are grouped across queues and ports. Poll RX by DAQIRI port ID
+(configuration order) and queue ID; set both in the TX burst header before
+reserving buffers. RX metadata retains the port/queue identity. RX metadata
+pools are sized per queue; TX metadata is shared across the engine.
+
+The module and userspace driver must both use **control ABI v2**. Rebuild and
+reload the matching shim after upgrading. The module manager's `--interface`
+accepts a comma-separated list of MGBE netdevs or `all` for multi-port sessions.
 
 Before runtime, load the matching shim in exclusive-port mode and quiesce the
 kernel netdev. Replacing `nvethernet` affects all its MGBE ports; the supplied
@@ -76,8 +91,10 @@ must release outstanding bursts before shutdown. Link loss invalidates the
 session and requires reopening it.
 
 The experimental driver has an unresolved intermittent first-frame RX visibility
-issue observed on isolated cores. Validate cold startup as well as sustained
-traffic for the deployment.
+issue observed on isolated cores. Simultaneous four-interface MAC-loopback
+stress also observed an early packet loss with a MAC CRC counter increment;
+that stress matrix did not complete without errors. Multi-port operation remains
+experimental. Validate cold startup as well as sustained traffic for the deployment.
 
 See the [driver source and complete build/install/rollback instructions](https://github.com/NVIDIA/daqiri/tree/main/drivers/mgbe)
 for the pinned vendor source, headers, container commands, installed artifacts

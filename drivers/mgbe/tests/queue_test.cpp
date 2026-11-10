@@ -185,7 +185,7 @@ void independent_tx_slots() {
 
 int main() {
   static_assert(sizeof(mgbe::Descriptor) == 16);
-  static_assert(sizeof(mgbe_pmd_info) == 80);
+  static_assert(sizeof(mgbe_pmd_info) == 88);
   static_assert(sizeof(mgbe_pmd_config) == 16);
   receive_ownership_and_wrap();
   malformed_and_partial_frames();

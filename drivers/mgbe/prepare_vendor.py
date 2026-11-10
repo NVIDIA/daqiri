@@ -63,6 +63,10 @@ def prepare(source: pathlib.Path, module: pathlib.Path):
     edit("ether_linux.c", ".ndo_open = ether_open,", ".ndo_open = mgbe_pmd_net_open,")
     edit("ether_linux.c", "\tether_init_rss(pdata, pdata->ndev->features);",
          "\tif (!mgbe_pmd_owned(pdata))\n\t\tether_init_rss(pdata, pdata->ndev->features);")
+    # Keep non-hashed broadcast traffic on the exclusive port's fallback queue.
+    edit_function("ether_linux.c", "ether_update_mac_addr_filter",
+                  "if (osi_dma->num_dma_chans > 1)",
+                  "if (osi_dma->num_dma_chans > 1 && !mgbe_pmd_owned(pdata))")
     edit("ether_linux.c", "\tret = ether_ptp_init(pdata);",
          "\tret = mgbe_pmd_owned(pdata) ? 0 : ether_ptp_init(pdata);")
     # Both the open error path and normal close have a PTP teardown.

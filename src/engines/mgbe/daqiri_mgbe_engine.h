@@ -16,7 +16,7 @@ namespace daqiri {
 class MgbePort {
  public:
   virtual ~MgbePort() = default;
-  virtual mgbe::Queue& queue() = 0;
+  virtual mgbe::Queue& queue(uint32_t id = 0) = 0;
   virtual void start() = 0;
 };
 
@@ -67,7 +67,7 @@ class MgbeEngine : public Engine {
 
  protected:
   virtual std::unique_ptr<MgbePort> open_port(const std::string& interface, uint32_t ring_size,
-                                              uint32_t mtu);
+                                              uint32_t mtu, uint32_t queue_count);
 
  private:
   struct Impl;

@@ -78,7 +78,8 @@ class Queue {
 
 class Device {
  public:
-  Device(const std::string& path, uint32_t ring_size = 1024, uint32_t mtu = 1500);
+  Device(const std::string& path, uint32_t ring_size = 1024, uint32_t mtu = 1500,
+         uint32_t queue_count = 1);
   ~Device();
   Device(const Device&) = delete;
   Device& operator=(const Device&) = delete;
@@ -86,9 +87,14 @@ class Device {
   void enable_mac_loopback();
   void stop();
   mgbe_pmd_stats hardware_stats();
-  Queue& queue() {
-    return *queue_;
+  Queue& queue(uint32_t id = 0) {
+    return *queues_.at(id);
   }
+  size_t queue_count() const {
+    return queues_.size();
+  }
+  mgbe_pmd_rss rss();
+  void configure_rss(const mgbe_pmd_rss& rss);
   const mgbe_pmd_status& status() const {
     return *status_;
   }
@@ -100,7 +106,7 @@ class Device {
     size_t size;
   };
   std::vector<Region> regions_;
-  std::unique_ptr<Queue> queue_;
+  std::vector<std::unique_ptr<Queue>> queues_;
   const mgbe_pmd_status* status_ = nullptr;
   void cleanup() noexcept;
 };
