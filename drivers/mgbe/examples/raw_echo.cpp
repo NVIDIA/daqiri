@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
   }
   bool failed = false;
   uint64_t echoed = 0;
-  std::cout << "MGBE raw echo ready" << std::endl;
+  std::cout << "{\"event\":\"ready\",\"engine\":\"mgbe\"}" << std::endl;
   while (!stopped && !failed) {
     daqiri::BurstParams* rx = nullptr;
     const auto status = daqiri::get_rx_burst(&rx, 0, 0);
@@ -41,37 +41,54 @@ int main(int argc, char** argv) {
       failed = true;
       break;
     }
-    for (int i = 0; i < daqiri::get_num_packets(rx) && !failed; ++i) {
+    std::array<int, 64> replies{};
+    size_t count = 0;
+    for (int i = 0; i < daqiri::get_num_packets(rx); ++i) {
       const auto length = daqiri::get_packet_length(rx, i);
       const auto* input = static_cast<const uint8_t*>(daqiri::get_packet_ptr(rx, i));
       if (length < sizeof(daqiri::UDPIPV4Pkt) || std::memcmp(input, mac.data(), 6) ||
           input[12] != 8 || input[13] != 0 || input[14] != 0x45 || input[23] != 17 ||
           (input[20] & 0x3f) || input[21])
         continue;
+      replies[count++] = i;
+    }
+    for (size_t next = 0; next < count && !failed;) {
       auto* tx = daqiri::create_tx_burst_params();
       if (!tx) {
         failed = true;
         break;
       }
-      daqiri::set_header(tx, 0, 0, 1, 1);
-      if (daqiri::get_tx_packet_burst(tx) != daqiri::Status::SUCCESS ||
-          daqiri::set_packet_lengths(tx, 0, {int(length)}) != daqiri::Status::SUCCESS) {
+      // The adapter exposes its configured TX capacity in the burst metadata:
+      // one for direct mode, up to batch_size for indirect mode.
+      const size_t n = std::min<size_t>(count - next, tx->hdr.hdr.max_pkt);
+      daqiri::set_header(tx, 0, 0, n, 1);
+      if (!n || daqiri::get_tx_packet_burst(tx) != daqiri::Status::SUCCESS) {
         daqiri::free_all_packets_and_burst_tx(tx);
         failed = true;
         break;
       }
-      auto* output = static_cast<uint8_t*>(daqiri::get_packet_ptr(tx, 0));
-      std::memcpy(output, input, length);
-      for (int j = 0; j < 6; ++j) std::swap(output[j], output[j + 6]);
-      for (int j = 0; j < 4; ++j) std::swap(output[26 + j], output[30 + j]);
-      for (int j = 0; j < 2; ++j) std::swap(output[34 + j], output[36 + j]);
-      // Swapping endpoints preserves the IPv4 and UDP checksum sums.
-      if (daqiri::send_tx_burst(tx) != daqiri::Status::SUCCESS) {
+      for (size_t i = 0; i < n; ++i) {
+        const int index = replies[next + i];
+        const auto length = daqiri::get_packet_length(rx, index);
+        if (daqiri::set_packet_lengths(tx, i, {int(length)}) != daqiri::Status::SUCCESS) {
+          failed = true;
+          break;
+        }
+        const auto* input = static_cast<const uint8_t*>(daqiri::get_packet_ptr(rx, index));
+        auto* output = static_cast<uint8_t*>(daqiri::get_packet_ptr(tx, i));
+        std::memcpy(output, input, length);
+        for (int j = 0; j < 6; ++j) std::swap(output[j], output[j + 6]);
+        for (int j = 0; j < 4; ++j) std::swap(output[26 + j], output[30 + j]);
+        for (int j = 0; j < 2; ++j) std::swap(output[34 + j], output[36 + j]);
+        // Swapping endpoints preserves the IPv4 and UDP checksum sums.
+      }
+      if (failed || daqiri::send_tx_burst(tx) != daqiri::Status::SUCCESS) {
         daqiri::free_all_packets_and_burst_tx(tx);
         failed = true;
         break;
       }
-      ++echoed;
+      next += n;
+      echoed += n;
     }
     daqiri::free_all_packets_and_burst_rx(rx);
   }

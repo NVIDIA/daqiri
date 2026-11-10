@@ -161,6 +161,26 @@ void capabilities_and_faults() {
   throws([&] { q.reclaim(); });
   throws([&] { mgbe::Device d("/this/mgbe/device/does/not/exist"); });
 }
+
+void independent_tx_slots() {
+  Fixture f;
+  mgbe::Queue q(f.mapping());
+  assert(q.tx_buffer_at(37) == f.tx_pool.data() + 37 * 2048);
+  throws([&] { q.tx_buffer_at(64); });
+  throws([&] { q.submit_buffer(64, 60); });
+  for (uint32_t i = 0; i < 63; ++i) {
+    assert(q.submit_buffer((i + 37) % 64, 60, false));
+    assert(le32toh(f.tx[i].word[0]) == f.info.tx_pool_dma + ((i + 37) % 64) * 2048);
+  }
+  assert(f.regs[f.info.tx_tail_offset / 4] == 0);  // No per-packet doorbell.
+  q.flush_tx();
+  assert(le32toh(f.regs[f.info.tx_tail_offset / 4]) == f.info.tx_ring_dma + 63 * 16);
+  assert(!q.submit_buffer(36, 60, false));
+  f.tx[0].word[3] = 0;
+  assert(q.reclaim() == 1);
+  assert(q.submit_buffer(36, 60));
+  assert(le32toh(f.tx[63].word[0]) == f.info.tx_pool_dma + 36 * 2048);
+}
 }  // namespace
 
 int main() {
@@ -171,5 +191,6 @@ int main() {
   malformed_and_partial_frames();
   transmit_exhaustion_and_reuse();
   capabilities_and_faults();
+  independent_tx_slots();
   std::cout << "MGBE queue ownership, wraparound, exhaustion and fault tests passed\n";
 }

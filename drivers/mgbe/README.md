@@ -21,10 +21,16 @@ remain unchanged; select MGBE explicitly.
   source port and renewed DMA/lifecycle validation; the builder rejects them.
 - One exclusive interface, one RX/TX queue pair, queue ID zero. `address` is
   its Linux netdev name (`mgbe0_0` through `mgbe3_0`), not a PCI address.
-- Both queues use `poll_mode: direct`. One application thread owns all packet
-  operations for the port; pin that thread to the desired CPU. No queue worker
-  thread is created, and direct queue definitions omit `cpu_core`, `batch_size`
-  and `timeout_us`.
+- Each direction supports `poll_mode: direct` or `poll_mode: indirect`, including
+  mixed modes. Direct operations use one application thread for the port; pin
+  that thread to the desired CPU. Direct queues omit `cpu_core`, `batch_size`
+  and `timeout_us` and create no worker for that direction.
+- Indirect queues require `cpu_core` and `batch_size` (1..64). Pinned pollers
+  service DMA, with bounded preallocated handoff rings between pollers and
+  application threads. RX and TX sharing a core use one worker; different cores
+  use separate workers. Applications may pass distinct bursts between threads;
+  each burst must have only one application owner at a time. Shutdown requires
+  application threads to stop using the engine first.
 - Two distinct `kind: host`, DAQIRI-owned memory regions: one per direction,
   with equal `num_bufs` and `buf_size`. Pools are allocated by the kernel shim,
   rather than by the generic userspace host allocator. External bindings,
@@ -32,10 +38,19 @@ remain unchanged; select MGBE explicitly.
 - `num_bufs` sets the hardware ring size: a power of two from 64 through 4096.
   `buf_size` is the maximum L2 frame excluding FCS, from 82 through 9014 bytes;
   the configured IP MTU is `buf_size - 14`. The sample uses standard MTU 1500.
-- Direct TX reserves one packet at a time. RX returns up to 64 packets per burst.
-  RX buffers remain application-owned until explicitly freed; transmitted TX
-  buffers remain hardware-owned until completion, even after burst metadata
-  is recycled. Only one unsubmitted TX reservation may exist per port.
+- Direct TX reserves one packet at a time; direct RX returns up to 64 packets.
+  Indirect TX accepts 1..`batch_size` packets per submission, supports multiple
+  unsubmitted reservations and batches DMA doorbells. Indirect RX publishes
+  full batches, or partial batches after `timeout_us` from their first packet;
+  zero disables the timeout and waits for a full batch.
+- RX data is read directly from mapped DMA buffers in both modes. TX writes
+  directly into mapped TX slots, with no worker payload copy. RX buffers remain
+  application-owned until freed. Successful TX submission transfers burst
+  ownership to the engine; failed submission leaves ownership with the caller.
+  Hardware-owned TX slots are recycled only after completion. Metadata and
+  payload exhaustion return the usual no-free-buffer statuses. A held RX buffer
+  can block ring rearming; an exhausted RX handoff leaves packets on the bounded
+  hardware ring, which can eventually drop new arrivals.
 - No flow steering, flow isolation, reorder, pacing, accurate send, hardware
   timestamps, offloads or internal-loopback mode through this engine. All
   traffic delivered by the MAC enters queue zero; the application filters it.
@@ -46,6 +61,48 @@ The Ethernet/IPv4/UDP header helpers fill the source MAC, calculate the IPv4
 checksum in software and use a legal zero UDP checksum. Applications may also
 construct complete raw frames themselves. Hardware timestamps and optional
 runtime flow/resource operations return `NOT_SUPPORTED`.
+
+## Selecting indirect mode
+
+[`config/daqiri_mgbe_indirect.yaml`](config/daqiri_mgbe_indirect.yaml) uses one
+worker on CPU 8 for both directions, batches of 32 and a 100-us partial RX
+batch timeout. Choose an available CPU for your host and pin application work
+on a separate core. Set different RX/TX `cpu_core` values for separate pollers.
+A failed worker affinity request aborts initialization and releases the port.
+Workers inherit the creating thread's scheduling policy; the engine sets their
+CPU affinity. Isolate worker CPUs through host configuration if required.
+
+```yaml
+rx:
+  queues:
+    - name: RX
+      id: 0
+      poll_mode: indirect
+      cpu_core: 8
+      batch_size: 32
+      timeout_us: 100
+      memory_regions: [RX]
+tx:
+  queues:
+    - name: TX
+      id: 0
+      poll_mode: indirect
+      cpu_core: 8
+      batch_size: 32
+      memory_regions: [TX]
+```
+
+Use the normal DAQIRI burst API. Set the TX header's packet count to the desired
+burst size before `get_tx_packet_burst()`, then fill and set lengths for every
+packet before `send_tx_burst()`. `wait_for_tx_idle()` drains queued and posted
+sends; it returns `RESOURCE_IN_USE` while the application holds unsubmitted TX
+buffers. Link/session faults fail operations and require shutdown/restart.
+
+Indirect mode separates application work from polling. It still uses **one
+hardware RX/TX queue pair**, with no RSS or additional queue IDs. Multi-queue
+support needs changes to the kernel shim, control ABI and userspace driver.
+Throughput gains depend on frame size, batching and CPU placement and must be
+measured on the target system.
 
 ## Build and install DAQIRI
 
@@ -138,6 +195,7 @@ the application waits briefly for PHY training and refuses to start without it.
 ```bash
 drivers/mgbe/container.sh build/mgbe/tools/daqiri_config_validate \
   drivers/mgbe/config/daqiri_mgbe.yaml
+# The same validator accepts config/daqiri_mgbe_indirect.yaml.
 drivers/mgbe/container.sh --root taskset -c 4 \
   build/mgbe/examples/daqiri_mgbe_raw_echo drivers/mgbe/config/daqiri_mgbe.yaml
 ```
@@ -170,15 +228,23 @@ the source-tree container wrapper.
 
 The MGBE-enabled CTests cover configuration rejection before device acquisition,
 RX ownership and out-of-order release, TX completion ownership/exhaustion,
-single-thread ownership, header checksums, initialization failure and cleanup.
+direct ownership, concurrent indirect submissions, batching, partial RX timeouts,
+mixed modes, worker faults/affinity failure, initialization failure and cleanup.
 Driver mock-ring tests cover wraparound and payload reuse without hardware.
 They do not establish wire delivery; use the native echo example with a cabled
 peer for an installation smoke test. Neither tests nor builds load modules.
 
 For cable-free DMA correctness validation, explicitly load the shim and run
-`build/mgbe/tests/cpp/daqiri_mgbe_dma_test config.yaml` as root. This standalone
+`build/mgbe/tests/cpp/daqiri_mgbe_dma_test config.yaml [worker_cpu]` as root
+(default worker CPU: 8). This standalone
 hardware test enables internal MAC loopback through a test-only port adapter,
-checks changing payloads across small/standard/jumbo frames and ring wraparound,
+checks changing payloads across small/standard/jumbo frames and ring wraparound
+in direct, indirect and mixed modes, including 32-packet TX batches,
 then closes each session. It is never registered with CTest, produces no
 performance measurements, and does not establish cable/peer delivery. The
 production `mgbe` engine continues to require carrier.
+
+An intermittent first-frame RX visibility failure has been observed in cabled
+runs on isolated cores. Its cause remains unresolved. A passing DMA or sustained
+traffic test does not establish reliable cold startup; verify first-frame payload
+integrity and timeout handling for the deployment as well.

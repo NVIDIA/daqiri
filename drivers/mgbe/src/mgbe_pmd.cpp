@@ -163,14 +163,25 @@ void Queue::cancel_tx() {
   tx_reserved_ = false;
 }
 bool Queue::submit(uint32_t length, bool flush) {
-  check_running();
   if (!tx_reserved_) throw std::logic_error("reserve a TX buffer before submission");
+  const bool result = submit_buffer(tx_next_ & mask_, length, flush);
+  if (result) tx_reserved_ = false;
+  return result;
+}
+uint8_t* Queue::tx_buffer_at(uint32_t slot) const {
+  if (slot > mask_) throw std::invalid_argument("invalid TX pool slot");
+  return m_.tx_pool + size_t(slot) * m_.info.slot_size;
+}
+bool Queue::submit_buffer(uint32_t buffer_slot, uint32_t length, bool flush) {
+  check_running();
+  if (buffer_slot > mask_) throw std::invalid_argument("invalid TX pool slot");
   if (length < 14 || length > m_.info.mtu + 18 || length > 0x3fffU)
     throw std::invalid_argument("TX frame exceeds MTU/buffer limit");
+  if (tx_next_ - tx_clean_ >= mask_) return false;
   const uint32_t slot = tx_next_ & mask_;
   auto& d = m_.tx[slot];
   if (load(&d.word[3]) & own) throw std::logic_error("TX slot is still hardware-owned");
-  const auto addr = m_.info.tx_pool_dma + uint64_t(slot) * m_.info.slot_size;
+  const auto addr = m_.info.tx_pool_dma + uint64_t(buffer_slot) * m_.info.slot_size;
   store(&d.word[0], addr);
   store(&d.word[1], addr >> 32);
   store(&d.word[2], length);
@@ -179,7 +190,6 @@ bool Queue::submit(uint32_t length, bool flush) {
   store(&d.word[3], own | first | last | length);
   tx_lengths_[slot] = length;
   ++tx_next_;
-  tx_reserved_ = false;
   tx_pending_ = true;
   if (flush) flush_tx();
   return true;

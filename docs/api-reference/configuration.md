@@ -59,7 +59,10 @@ These settings apply globally to both TX and RX:
   - values: `dpdk`, `socket`, `ibverbs`, `mgbe`
   - `mgbe` selects the [Tegra MGBE userspace driver](../tutorials/mgbe-driver.md)
     for raw Ethernet. It requires an MGBE-enabled build and the matching kernel
-    shim; interfaces use netdev names and direct queues with host DMA pools.
+    shim; interfaces use netdev names and host DMA pools. Direct and indirect
+    polling are supported on one hardware RX/TX queue pair (ID 0). Indirect
+    queues support batches of 1..64; see the driver guide for ownership and
+    worker configuration.
   - Builds with `DAQIRI_IBVERBS_DLOPEN=ON` require the selected raw ibverbs or
     RoCE engine's glue library and compatible system RDMA shared libraries at
     initialization. This is a CMake option; YAML engine selection uses the same

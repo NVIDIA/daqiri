@@ -1386,9 +1386,15 @@ All functions that can fail return `daqiri::Status`:
 ## Tegra MGBE raw Ethernet
 
 An MGBE-enabled build accepts `stream_type: raw` with `engine: mgbe` and uses
-the same packet/burst functions. One application thread owns direct RX and
-single-packet TX for queue zero. Host buffers belong to the kernel DMA pools;
+the same packet/burst functions. One application thread owns direct operations;
+direct TX sends one packet per call. Indirect queues use pinned workers and
+accept TX bursts of 1..64 packets, up to the configured `batch_size`. Modes may
+differ by direction; both use the same hardware queue pair, ID zero.
+Host buffers belong to the kernel DMA pools;
 free RX bursts explicitly and release canceled TX reservations. Successful
-`send_tx_burst` consumes its metadata; an error retains it for cleanup. Optional
+`send_tx_burst` transfers burst ownership to the engine; an error retains it for
+cleanup. Indirect mode permits concurrent application owners of distinct bursts.
+`wait_for_tx_idle()` covers queued and posted sends, and TX data remains owned by
+the engine until hardware completion. Optional
 flow/resource operations, GPU memory, timestamps and scheduling are unsupported.
 See [driver build, installation and configuration](../tutorials/mgbe-driver.md).

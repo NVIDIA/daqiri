@@ -19,11 +19,12 @@ struct Packet {
 };
 struct Counters {
   uint64_t rx_packets = 0, rx_bytes = 0, rx_errors = 0;
-  uint64_t tx_packets = 0, tx_bytes = 0, tx_errors = 0;
+  alignas(64) uint64_t tx_packets = 0, tx_bytes = 0, tx_errors = 0;
 };
 
-// One thread owns a Queue. Returned buffers must not outlive it. TX submissions
-// use separate registered TX slots; callers write directly into tx_buffer().
+// One thread owns each direction of a Queue. RX and TX may have separate owners;
+// Each counter field may only be read by its direction's owner or while that
+// owner is quiescent. Returned buffers must not outlive the Queue.
 class Queue {
  public:
   struct Mapping {
@@ -44,6 +45,11 @@ class Queue {
   uint8_t* tx_buffer();
   void cancel_tx();
   bool submit(uint32_t length, bool flush = true);
+  // Indirect-mode pool slots are independent of cyclic descriptor indices.
+  // The caller owns slot allocation and must retain each slot until reclaim()
+  // reports its completion, in submission order. Do not mix with tx_buffer().
+  uint8_t* tx_buffer_at(uint32_t slot) const;
+  bool submit_buffer(uint32_t slot, uint32_t length, bool flush = true);
   void flush_tx();
   size_t reclaim();
   const Counters& counters() const {
@@ -59,7 +65,9 @@ class Queue {
   void mark_released(const Packet& packet);
   Mapping m_;
   uint32_t mask_;
-  uint64_t rx_next_ = 0, rx_rearm_ = 0, tx_next_ = 0, tx_clean_ = 0;
+  // Separate owners must not bounce a shared cache line on every packet.
+  alignas(64) uint64_t rx_next_ = 0, rx_rearm_ = 0;
+  alignas(64) uint64_t tx_next_ = 0, tx_clean_ = 0;
   bool tx_reserved_ = false;
   bool tx_pending_ = false;
   std::vector<uint8_t> rx_state_;

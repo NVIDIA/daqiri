@@ -1,0 +1,42 @@
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: raw
+    engine: mgbe
+    master_core: 0
+    log_level: info
+    tx_meta_buffers: 64
+    rx_meta_buffers: 64
+    memory_regions:
+      - name: RX
+        kind: host
+        affinity: 0
+        num_bufs: 1024
+        buf_size: 1514
+      - name: TX
+        kind: host
+        affinity: 0
+        num_bufs: 1024
+        buf_size: 1514
+    interfaces:
+      - name: mgbe
+        address: mgbe0_0
+        rx:
+          queues:
+            - name: RX
+              id: 0
+              poll_mode: indirect
+              cpu_core: 8
+              batch_size: 32
+              timeout_us: 100
+              memory_regions: [RX]
+        tx:
+          queues:
+            - name: TX
+              id: 0
+              poll_mode: indirect
+              cpu_core: 8
+              batch_size: 32
+              memory_regions: [TX]
