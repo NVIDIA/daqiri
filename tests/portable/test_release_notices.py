@@ -26,6 +26,7 @@ from scripts.release.collect_sources import (
     find_notice_files,
     find_package_notice_files,
     render_third_party_notices,
+    select_python_artifact,
 )
 
 
@@ -87,3 +88,19 @@ def test_unclassified_packages_fail_closed(tmp_path):
 
     with pytest.raises(RuntimeError, match="No attribution material"):
         find_package_notice_files("unknown-oss-source", missing_doc)
+
+
+def test_python_source_collection_does_not_substitute_unknown_binary_wheels():
+    wheel = {"packagetype": "bdist_wheel", "filename": "unknown-py3-none-manylinux_2_25_aarch64.whl"}
+    with pytest.raises(RuntimeError, match="Expected one matching Python artifact"):
+        select_python_artifact("unknown-oss-source", [wheel], "aarch64")
+
+
+def test_cupti_binary_retention_requires_exact_native_architecture():
+    arm = {"packagetype": "bdist_wheel", "filename": "nvidia_cuda_cupti-13.4.92-py3-none-manylinux_2_25_aarch64.whl"}
+    amd = {"packagetype": "bdist_wheel", "filename": "nvidia_cuda_cupti-13.4.92-py3-none-manylinux_2_25_x86_64.whl"}
+    assert select_python_artifact("nvidia-cuda-cupti", [arm, amd], "aarch64") == arm
+    with pytest.raises(RuntimeError, match="Expected one matching Python artifact"):
+        select_python_artifact("nvidia-cuda-cupti", [amd], "aarch64")
+    with pytest.raises(RuntimeError, match="Expected one matching Python artifact"):
+        select_python_artifact("nvidia-cuda-cupti", [arm, arm], "aarch64")
