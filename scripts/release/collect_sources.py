@@ -16,16 +16,32 @@ import hashlib
 import importlib.metadata
 import json
 from pathlib import Path
+import platform
 import re
 import shutil
 import subprocess
 import tarfile
+import urllib.request
 
 
 QUERY = "${binary:Package}\t${Version}\t${source:Package}\t${source:Version}\n"
 
 NOTICE_WORDS = ("license", "copying", "eula", "notice")
-NON_OSS_PACKAGE_SOURCES = frozenset({"mft"})
+NON_OSS_PACKAGE_SOURCES = frozenset({"mft", "nsight-systems-cli-2026.6.1"})
+NON_OSS_PYTHON_PACKAGES = frozenset({"nvidia-cuda-cupti"})
+
+
+def select_python_artifact(name, urls, machine):
+    """Require exact OSS source; retain known proprietary binaries separately."""
+    if name in NON_OSS_PYTHON_PACKAGES:
+        candidates = [item for item in urls
+                      if item["packagetype"] == "bdist_wheel"
+                      and item["filename"].endswith(f"_{machine}.whl")]
+    else:
+        candidates = [item for item in urls if item["packagetype"] == "sdist"]
+    if len(candidates) != 1:
+        raise RuntimeError(f"Expected one matching Python artifact for {name} ({machine})")
+    return candidates[0]
 
 
 def find_notice_files(doc, required=True):
@@ -49,6 +65,20 @@ def find_notice_files(doc, required=True):
 
 def find_package_notice_files(source, doc):
     return find_notice_files(doc, required=source not in NON_OSS_PACKAGE_SOURCES)
+
+
+def copy_python_notices(dist, destination):
+    """Retain notice paths so bundled dependencies cannot overwrite each other."""
+    for entry in dist.files or []:
+        if any(word in entry.name.lower() for word in NOTICE_WORDS):
+            relative = Path(entry)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise RuntimeError(f"Invalid Python notice path: {entry}")
+            origin = Path(dist.locate_file(entry))
+            if origin.is_file():
+                target = destination / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(origin, target)
 
 
 def render_third_party_notices(project_notice, packages):
@@ -167,6 +197,22 @@ def main():
     provenance = []
     with tarfile.open(bundle) as archive:
         for source, version in sources:
+            if source == "nsight-systems-cli-2026.6.1":
+                review = {
+                    "source": source, "version": version,
+                    "kind": "proprietary package with bundled OSS",
+                    "review_required": True,
+                    "reason": "Vendor source and notice coverage for bundled OSS requires review.",
+                }
+                provenance.append(review)
+                (output / "nsight-source-review.json").write_text(json.dumps(review, indent=2) + "\n")
+                nsight_root = Path("/opt/nvidia/nsight-systems-cli/2026.6.1")
+                for notice in nsight_root.rglob("*"):
+                    if notice.is_file() and any(word in notice.name.lower() for word in NOTICE_WORDS):
+                        target = notices / source / notice.relative_to(nsight_root)
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(notice, target)
+                continue
             if source == "mft":
                 # A proprietary Debian package can still bundle OSS outside
                 # dpkg's dependency graph. Do not claim complete source coverage.
@@ -233,6 +279,44 @@ def main():
         key=lambda row: (row["name"] or "").lower(),
     )
     (output / "python-packages.json").write_text(json.dumps(python_packages, indent=2) + "\n")
+    baseline_python = json.loads((output / "base-python-packages.json").read_text())
+    python_provenance = []
+    python_vendor_reviews = []
+    for package in python_packages:
+        name = package["name"].lower().replace("_", "-")
+        version = package["version"]
+        if baseline_python.get(name) == version:
+            continue
+        with urllib.request.urlopen(f"https://pypi.org/pypi/{name}/{version}/json", timeout=60) as response:
+            metadata = json.load(response)
+        artifact = select_python_artifact(name, metadata["urls"], platform.machine())
+        filename = artifact["filename"]
+        if Path(filename).name != filename:
+            raise RuntimeError(f"Invalid source filename: {filename}")
+        with urllib.request.urlopen(artifact["url"], timeout=60) as response:
+            content = response.read()
+        digest = hashlib.sha256(content).hexdigest()
+        if digest != artifact["digests"]["sha256"]:
+            raise RuntimeError(f"Python artifact checksum mismatch: {name}")
+        proprietary = name in NON_OSS_PYTHON_PACKAGES
+        artifact_root = output / "vendor-artifacts" if proprietary else source_dir
+        destination = artifact_root / "python" / name
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / filename).write_bytes(content)
+        provenance_entry = {"name": name, "version": version, "url": artifact["url"], "sha256": digest}
+        if proprietary:
+            provenance_entry.update({
+                "kind": "proprietary binary wheel; not an OSS source archive",
+                "review_required": True,
+                "reason": "Vendor source and notice coverage for any bundled OSS requires review.",
+            })
+            python_vendor_reviews.append(provenance_entry)
+        python_provenance.append(provenance_entry)
+        dist = importlib.metadata.distribution(name)
+        copy_python_notices(dist, notices / "python" / name)
+    (output / "python-source-provenance.json").write_text(json.dumps(python_provenance, indent=2) + "\n")
+    if python_vendor_reviews:
+        (output / "python-vendor-source-review.json").write_text(json.dumps(python_vendor_reviews, indent=2) + "\n")
     (output / "THIRD-PARTY-NOTICES").write_text(
         render_third_party_notices(args.project_notices.read_text(), package_notices)
     )
