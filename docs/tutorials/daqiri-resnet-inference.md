@@ -5,6 +5,13 @@ hide:
 
 # DAQIRI → TensorRT ResNet Inference
 
+The shipped example exports a single fp16 ResNet feature model: DAQIRI converts
+signed int8 wire pixels to fp16 batches, and TensorRT reads the model's fp16
+types from ONNX. The application supports TensorRT 10 and 11. TensorRT 11
+rejects the legacy `inference.enable_int8` calibration option; int8 pixels on
+the wire do not require it. Regenerate cached TensorRT engines when changing
+the model, GPU, or TensorRT version.
+
 This tutorial connects DAQIRI packet ingestion to a GPU inference pipeline.
 Config-based GPU reorder converts wire **int8** samples into a contiguous
 **fp16** NCHW batch, an SPSC ring decouples RX from TensorRT, and ResNet-50
