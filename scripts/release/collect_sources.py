@@ -67,6 +67,20 @@ def find_package_notice_files(source, doc):
     return find_notice_files(doc, required=source not in NON_OSS_PACKAGE_SOURCES)
 
 
+def copy_python_notices(dist, destination):
+    """Retain notice paths so bundled dependencies cannot overwrite each other."""
+    for entry in dist.files or []:
+        if any(word in entry.name.lower() for word in NOTICE_WORDS):
+            relative = Path(entry)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise RuntimeError(f"Invalid Python notice path: {entry}")
+            origin = Path(dist.locate_file(entry))
+            if origin.is_file():
+                target = destination / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(origin, target)
+
+
 def render_third_party_notices(project_notice, packages):
     if not project_notice.strip():
         raise RuntimeError("Project attribution file is empty")
@@ -299,13 +313,7 @@ def main():
             python_vendor_reviews.append(provenance_entry)
         python_provenance.append(provenance_entry)
         dist = importlib.metadata.distribution(name)
-        for entry in dist.files or []:
-            if any(word in entry.name.lower() for word in NOTICE_WORDS):
-                origin = Path(dist.locate_file(entry))
-                if origin.is_file():
-                    target = notices / "python" / name / entry.name
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(origin, target)
+        copy_python_notices(dist, notices / "python" / name)
     (output / "python-source-provenance.json").write_text(json.dumps(python_provenance, indent=2) + "\n")
     if python_vendor_reviews:
         (output / "python-vendor-source-review.json").write_text(json.dumps(python_vendor_reviews, indent=2) + "\n")

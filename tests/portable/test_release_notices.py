@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+from importlib.metadata import Distribution, PackagePath
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -23,6 +25,7 @@ def test_repository_notice_covers_vendored_components():
 import pytest
 
 from scripts.release.collect_sources import (
+    copy_python_notices,
     find_notice_files,
     find_package_notice_files,
     render_third_party_notices,
@@ -88,6 +91,47 @@ def test_unclassified_packages_fail_closed(tmp_path):
 
     with pytest.raises(RuntimeError, match="No attribution material"):
         find_package_notice_files("unknown-oss-source", missing_doc)
+
+
+def test_python_notices_preserve_same_named_files_in_different_directories(tmp_path):
+    installed = tmp_path / "site-packages"
+    metadata = installed / "example-1.0.dist-info"
+    metadata.mkdir(parents=True)
+    documents = {
+        "example/vendor/first/LICENSE": "First dependency license\n",
+        "example/vendor/second/LICENSE": "Second dependency license\n",
+        "example-1.0.dist-info/licenses/NOTICE": "Package notice\n",
+        "example/module.py": "# Not a notice\n",
+    }
+    for relative, content in documents.items():
+        origin = installed / relative
+        origin.parent.mkdir(parents=True, exist_ok=True)
+        origin.write_text(content)
+    (metadata / "RECORD").write_text(
+        "".join(f"{relative},,\n" for relative in documents)
+    )
+    destination = tmp_path / "notices/python/example"
+
+    copy_python_notices(Distribution.at(metadata), destination)
+
+    retained = {
+        path.relative_to(destination).as_posix(): path.read_text()
+        for path in destination.rglob("*")
+        if path.is_file()
+    }
+    assert retained == {
+        relative: content
+        for relative, content in documents.items()
+        if relative != "example/module.py"
+    }
+
+
+@pytest.mark.parametrize("entry", ["../LICENSE", "/tmp/LICENSE"])
+def test_python_notices_reject_paths_outside_destination(tmp_path, entry):
+    dist = SimpleNamespace(files=[PackagePath(entry)])
+
+    with pytest.raises(RuntimeError, match="Invalid Python notice path"):
+        copy_python_notices(dist, tmp_path / "notices")
 
 
 def test_python_source_collection_does_not_substitute_unknown_binary_wheels():
