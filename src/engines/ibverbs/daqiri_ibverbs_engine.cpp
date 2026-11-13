@@ -56,6 +56,13 @@
 
 namespace daqiri {
 
+GpuTxMapping::~GpuTxMapping() {
+  if (host == nullptr) return;
+  CudaContextGuard guard(context);
+  if (!guard.valid() || cuMemHostUnregister(host) != CUDA_SUCCESS)
+    DAQIRI_LOG_ERROR("Could not unregister GPU TX doorbell page {}", host);
+}
+
 // mlx5 requires a completion mode on every SQ WQE. Unsignaled WQEs use
 // ONLY_FIRST_ERR; selected WQEs use ALWAYS so the CQ can drive reclamation.
 // A zero completion mode can stall an SQ containing consecutive WAIT WQEs.
@@ -781,10 +788,10 @@ const EndpointInlineTxMetadata* endpoint_inline_metadata(const BurstParams* burs
 struct IbvBurstLayout {
   std::array<size_t, MAX_NUM_SEGS> off_pkts;
   std::array<size_t, MAX_NUM_SEGS> off_lens;
-  size_t off_wqe;      // uint16_t[max_batch] -- region per packet
-  size_t off_strd;     // uint16_t[max_batch] -- strides per packet
-  size_t off_ts;       // uint64_t[max_batch] -- raw HW RX timestamp per packet
-  size_t off_flowtag;  // uint32_t[max_batch] -- per-packet flow tag (MARK)
+  size_t off_wqe;               // uint16_t[max_batch] -- region per packet
+  size_t off_strd;              // uint16_t[max_batch] -- strides per packet
+  size_t off_ts;                // uint64_t[max_batch] -- raw HW RX timestamp per packet
+  size_t off_flowtag;           // uint32_t[max_batch] -- per-packet flow tag (MARK)
   size_t off_tx_timestamp_ids;  // TxTimestampId[max_batch] -- requested TX completions
   std::array<size_t, MAX_NUM_SEGS> off_shared;
   size_t total;
@@ -7313,6 +7320,8 @@ void IbverbsEngine::destroy_tx_queue(IbvTxQueue& q) {
     tx_meta_pool_->put(q.direct_pending);
     q.direct_pending = nullptr;
   }
+  q.gpu_record_mapping.reset();
+  q.gpu_uar_mapping.reset();
   if (q.qp != nullptr) {
     verbs_->destroy_qp(q.qp);
     q.qp = nullptr;
@@ -8096,6 +8105,8 @@ void IbverbsEngine::shutdown() {
         tx_meta_pool_->put(burst);
       }
     }
+    q->gpu_record_mapping.reset();
+    q->gpu_uar_mapping.reset();
     if (q->qp) {
       if (verbs_->destroy_qp(q->qp) != 0 && q->shared_tx) {
         // Retain all DMA-visible storage and registrations rather than freeing
@@ -8921,6 +8932,8 @@ bool IbverbsEngine::direct_tx_has_capacity(IbvTxQueue& q, uint64_t needed_wqebbs
 // CQE. Emit one signaled NOP at an explicit drain boundary so completion of the
 // NOP retires all earlier sends without consuming a packet slot.
 bool IbverbsEngine::emit_direct_drain_nop(IbvTxQueue& q) {
+  // A CPU doorbell would also publish the not-yet-ready GPU packet.
+  if (q.gpu_pending_wqebb != 0 && q.sq_completed < q.gpu_pending_wqebb) return false;
   if (!tx_sq_has_space(q, 1)) {
     return false;
   }
@@ -9545,7 +9558,7 @@ void IbverbsEngine::post_endpoint_inline_burst(IbvTxQueue& q, BurstParams* burst
 // one-packet burst does not request a CQE every time.
 // Does NOT free the metadata block; the worker or direct caller does that after
 // this function returns.
-void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
+void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst, GpuTxSubmission* submission) {
   const int n = static_cast<int>(burst->hdr.hdr.num_pkts);
   const int segs = burst->hdr.hdr.num_segs;
   if (n <= 0) {
@@ -9596,7 +9609,7 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   static constexpr int SIGNAL_EVERY = 32;
   uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
   const uint32_t wqe_cnt = q.dv_qp.sq.wqe_cnt;
-  const uint32_t stride = q.dv_qp.sq.stride;          // 64 B (one WQEBB)
+  const uint32_t stride = q.dv_qp.sq.stride;  // 64 B (one WQEBB)
   const uint8_t ds = gather_wqe_ds(segs);
   const uint64_t* txtime = scheduled ? burst_ts_arr(burst) : nullptr;
   void* last_ctrl = nullptr;
@@ -9614,7 +9627,7 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
     uint8_t* seg = sq_buf + static_cast<size_t>(idx) * stride;
     auto* ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(seg);
     const auto timestamp_id = packet_tx_timestamp_id(burst, i);
-    const bool signaled = timestamp_id != INVALID_TX_TIMESTAMP_ID ||
+    const bool signaled = submission != nullptr || timestamp_id != INVALID_TX_TIMESTAMP_ID ||
                           (q.poll_mode == QueuePollMode::DIRECT
                                ? ((q.slots_posted + 1) % 16 == 0)
                                : (((i % SIGNAL_EVERY) == (SIGNAL_EVERY - 1)) || (i == n - 1)));
@@ -9679,6 +9692,31 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   }
   burst->hdr.hdr.burst_flags &= ~IBV_TX_TIMESTAMP_FLAG;
 
+  if (submission != nullptr) {
+    // Publish WQEs to the GPU before its release/acquire command handshake.
+    // Neither DBREC nor MMIO is touched on the CPU: even a drain doorbell here
+    // could let the NIC fetch a packet that its GPU producer is still writing.
+    doorbell_store_barrier();
+    submission->record =
+        q.gpu_record_mapping->device + (reinterpret_cast<uintptr_t>(&q.dv_qp.dbrec[MLX5_SND_DBR]) -
+                                        reinterpret_cast<uintptr_t>(q.gpu_record_mapping->host));
+    submission->doorbell = q.gpu_uar_mapping->device +
+                           (reinterpret_cast<uintptr_t>(q.dv_qp.bf.reg) -
+                            reinterpret_cast<uintptr_t>(q.gpu_uar_mapping->host)) +
+                           q.bf_offset;
+    // A regular GPU doorbell carries the producer index *after* the last WQE
+    // and QPN, with no inline WQE DS/opcode. Unlike the CPU BlueFlame control
+    // word, it lets the first notification fetch through the prepared SEND
+    // before DBREC is updated (the same encoding used by GPUNetIO).
+    const uint32_t db[2] = {htobe32(static_cast<uint32_t>(q.sq_pi << 8)), htobe32(q.sqn << 8)};
+    memcpy(&submission->doorbell_value, db, sizeof(db));
+    submission->record_value = htobe32(static_cast<uint32_t>(q.sq_pi) & 0xffff);
+    submission->doorbell_offset = q.bf_offset;
+    q.gpu_pending_wqebb = q.sq_pi;
+    q.bf_offset ^= q.dv_qp.bf.size;
+    return;
+  }
+
   // Ring the SQ doorbell once for the whole burst: publish the WQEs, bump the
   // doorbell record, then write the last ctrl segment to the BlueFlame register.
   doorbell_store_barrier();  // WQEs visible before the doorbell record
@@ -9697,6 +9735,97 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   }
   doorbell_mmio_flush();
   q.bf_offset ^= q.dv_qp.bf.size;
+}
+
+std::shared_ptr<GpuTxMapping> IbverbsEngine::map_gpu_tx_page(void* address, CUcontext context,
+                                                             bool io) {
+  const auto page_size = static_cast<uintptr_t>(sysconf(_SC_PAGESIZE));
+  const auto page = reinterpret_cast<uintptr_t>(address) & ~(page_size - 1);
+  std::lock_guard<std::mutex> guard(gpu_tx_mapping_mutex_);
+  auto& cached = gpu_tx_mappings_[{context, page}];
+  if (auto mapping = cached.lock()) return mapping;
+  auto* host = reinterpret_cast<void*>(page);
+  const unsigned flags = CU_MEMHOSTREGISTER_DEVICEMAP | (io ? CU_MEMHOSTREGISTER_IOMEMORY : 0);
+  CUresult result = cuMemHostRegister(host, page_size, flags);
+  CUdeviceptr device = 0;
+  if (result == CUDA_SUCCESS) {
+    result = cuMemHostGetDevicePointer(&device, host, 0);
+    if (result != CUDA_SUCCESS) (void)cuMemHostUnregister(host);
+  }
+  if (result != CUDA_SUCCESS) {
+    const char* name = "unknown CUDA error";
+    cuGetErrorName(result, &name);
+    DAQIRI_LOG_ERROR("GPU TX {} mapping failed: {}", io ? "NIC UAR" : "doorbell record", name);
+    return nullptr;
+  }
+  auto mapping = std::make_shared<GpuTxMapping>();
+  mapping->host = host;
+  mapping->device = device;
+  mapping->context = context;
+  cached = mapping;
+  return mapping;
+}
+
+Status IbverbsEngine::map_gpu_tx_queue(IbvTxQueue& q) {
+  CUcontext context = nullptr;
+  CUdevice device = 0;
+  if (cuCtxGetCurrent(&context) != CUDA_SUCCESS || context == nullptr)
+    return Status::INVALID_PARAMETER;
+  if (q.gpu_uar_mapping)
+    return q.gpu_uar_mapping->context == context ? Status::SUCCESS : Status::INVALID_PARAMETER;
+  if (cuCtxGetDevice(&device) != CUDA_SUCCESS) return Status::INVALID_PARAMETER;
+  for (const auto& name : q.mr_names) {
+    const auto& mr = cfg_.mrs_.at(name);
+    if (mr.kind_ != MemoryKind::DEVICE || mr.affinity_ != device) return Status::NOT_SUPPORTED;
+  }
+  int major = 0;
+  if (cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device) !=
+          CUDA_SUCCESS ||
+      major < 7)
+    return Status::NOT_SUPPORTED;
+  const auto page_size = static_cast<uintptr_t>(sysconf(_SC_PAGESIZE));
+  if ((reinterpret_cast<uintptr_t>(q.dv_qp.bf.reg) % page_size) + q.dv_qp.bf.size + 8 > page_size)
+    return Status::NOT_SUPPORTED;
+  auto uar = map_gpu_tx_page(q.dv_qp.bf.reg, context, true);
+  if (!uar) return Status::NOT_SUPPORTED;
+  auto record = map_gpu_tx_page(q.dv_qp.dbrec, context, false);
+  if (!record) return Status::NOT_SUPPORTED;
+  q.gpu_uar_mapping = std::move(uar);
+  q.gpu_record_mapping = std::move(record);
+  DAQIRI_LOG_INFO("GPU doorbell TX enabled on port {} queue {} (GPU {})", q.port_id, q.queue_id,
+                  device);
+  return Status::SUCCESS;
+}
+
+Status IbverbsEngine::prepare_tx_burst_gpu(BurstParams* burst, GpuTxSubmission* submission) {
+  if (submission == nullptr) return Status::NULL_PTR;
+  *submission = {};
+  if (burst == nullptr) return Status::NULL_PTR;
+  QueueUse<IbvTxQueue> q(acquire_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id));
+  if (!q) return Status::INVALID_PARAMETER;
+  if (q->poll_mode != QueuePollMode::DIRECT || q->shared_tx || q->cpu_inline_enabled ||
+      (burst->hdr.hdr.burst_flags & (IBV_TX_ENDPOINT_INLINE_FLAG | IBV_TX_SHARED_FLAG)) != 0)
+    return Status::NOT_SUPPORTED;
+  if (!owns_direct_tx_queue(*q)) return Status::NOT_READY;
+  if (q->direct_pending != burst || burst->hdr.hdr.num_pkts != 1 ||
+      burst->hdr.hdr.num_segs != q->num_segs)
+    return Status::INVALID_PARAMETER;
+  for (int s = 0; s < q->num_segs; ++s)
+    if (burst->pkts[s][0] == nullptr || burst->pkt_lens[s][0] == 0 ||
+        burst->pkt_lens[s][0] > q->regions[s].slot_size)
+      return Status::INVALID_PARAMETER;
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_TIMESTAMP_FLAG) != 0) {
+    std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
+    const auto it = tx_timestamp_requests_.find(burst_tx_timestamp_ids(burst)[0]);
+    if (it != tx_timestamp_requests_.end() && it->second.queue != q.get())
+      return Status::INVALID_PARAMETER;
+  }
+  const Status mapped = map_gpu_tx_queue(*q);
+  if (mapped != Status::SUCCESS) return mapped;
+  post_tx_burst(*q, burst, submission);
+  q->direct_pending = nullptr;
+  tx_meta_pool_->put(burst);
+  return Status::SUCCESS;
 }
 
 Status IbverbsEngine::prepare_endpoint_tx_burst(const IbvTxQueue& q,
@@ -9810,6 +9939,12 @@ Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
       DAQIRI_LOG_WARN("Direct TX port {} queue {} requires its one pending single-packet burst",
                       q->port_id, q->queue_id);
       return Status::INVALID_PARAMETER;
+    }
+    if (q->gpu_pending_wqebb > q->sq_completed) {
+      poll_tx_completions(*q);
+      // A CPU SEND would publish every prepared WQE through sq_pi. Retain the
+      // caller's pending burst until all GPU-prepared sends have completed.
+      if (q->gpu_pending_wqebb > q->sq_completed) return Status::NOT_READY;
     }
     post_tx_burst(*q, burst);
     q->direct_pending = nullptr;

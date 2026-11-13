@@ -336,6 +336,169 @@ After having modified the configuration file, ensure you have connected an SFP c
 
 By default the application runs for 10 seconds and then exits. You can change the duration by passing `--seconds <N>` after the YAML path, or stop it gracefully at any time with `Ctrl-C`.
 
+### GPU packet TX deadlines
+
+`daqiri_bench_tx_deadline` compares GPU-initiated GPUNetIO accurate TX with
+DAQIRI's direct ibverbs TX after GPU-to-CPU notification, and with GDRCopy
+prepublished WQEs submitted by a GPU doorbell. A CUDA block constructs
+every packet byte, including Ethernet/IPv4/UDP headers, a sequence number, and
+the scheduled deadline. Packet buffers remain in device memory until the NIC
+completes. All transmitters request one hardware completion per packet and use
+the same DAQIRI RX queue with hardware timestamps. GPUNetIO cycles through a
+device packet pool with the DAQIRI TX region's slot count and power-of-two
+allocation stride, matching DAQIRI's buffer geometry.
+
+Build in the project container with DOCA **3.2.x** available through pkg-config
+and GDRCopy **2.5.1** headers/library installed:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+  -DDAQIRI_ENGINE=ibverbs -DDAQIRI_BUILD_PYTHON=OFF \
+  -DDAQIRI_BENCH_GPUNETIO=ON -DDAQIRI_BENCH_GDRCOPY=ON \
+  -DGDRCOPY_ROOT=/opt/gdrcopy
+cmake --build build --target daqiri_bench_tx_deadline daqiri_config_validate -j
+```
+
+Both comparison dependencies are optional. The default build supports the six
+CPU notification methods. `all` selects only compiled methods; explicitly
+requesting an unavailable method fails. GDRCopy requires the matching `gdrdrv`
+kernel module and access to `/dev/gdrdrv`; load it through the host administrator.
+Missing GDRCopy support fails explicitly; there is no CUDA-copy fallback.
+The GPUNetIO CQ adapter uses the DOCA 3.2 published mlx5 CQ layout;
+other DOCA minor versions require a reviewed adapter. It forces GPU doorbells
+and consumes CQEs on the GPU; a CPU proxy or progress engine does not submit
+or consume GPUNetIO sends.
+
+Resolve `examples/daqiri_bench_tx_deadline.yaml` into a fresh file. It requires a
+cabled path between the selected TX/RX ports, direct polling, a single device TX
+region on the selected GPU, no TX header offloads, and uncompressed RX CQEs.
+Use the ports' actual source/destination MACs and PHC devices (`ethtool -T`).
+Synchronize both NIC clocks and `CLOCK_REALTIME` first. The benchmark checks
+PHC/system offsets and cross-timestamp brackets before and after each condition;
+it never adjusts host clocks. Clock bounds default to 1000 ns offset and 5000 ns
+bracket and can be tightened through `bench_tx_deadline`.
+
+```bash
+./build/tools/daqiri_config_validate resolved-deadline.yaml
+sudo ./build/examples/daqiri_bench_tx_deadline resolved-deadline.yaml \
+  --method all --samples 10000 --warmup 1000 --repeats 3 \
+  --lead-ns 2000,5000,10000,20000,50000,100000 --csv tx-deadline.csv
+```
+
+The methods are `daqiri-mapped-flag`, `daqiri-event-poll`, `daqiri-stream-poll`,
+`daqiri-event-sync`, `daqiri-host-callback`, and `daqiri-persistent-flag`.
+`daqiri-gdrcopy-prebuilt` is the retained DAQIRI GPU submission method. The CPU
+encodes a window of WAIT/SEND pairs, then uses `gdr_copy_to_mapping()` to place
+the WQEs and 16-byte submission tickets in GPU memory before the command window.
+Each packet needs 128 bytes of WQEs: a 32-packet window copies 4096 bytes of WQEs
+and 512 bytes of tickets. Pinning/mapping happens once. Store barriers and a CPU
+CUDA ordering call complete publication before commands; no WQE or ticket uses
+`cudaMemcpy`. A persistent 128-thread GPU block constructs the packet and calls
+[`submit_tx_gpu()`](../api-reference/cpp.md#gpu-doorbell-tx).
+The SQ is GPU-resident, while the doorbell record and CQ are mapped host memory;
+the GPU reads the TX completion timestamp. This benchmark owns an independent
+DevX SQ and packet pool; it does not change the production engine's SQ allocator.
+The discarded CUDA-copy, on-demand staging, and placement diagnostic variants
+are not benchmark methods.
+
+`gpunetio-prebuilt-persistent` prepares WAIT/SEND WQEs with 32 GPU threads using
+the SDK encoders before the same command window, then calls the unmodified SDK
+EXCLUSIVE/SYS/GPU_SM_DB submit API for each packet. Four reserved WAIT words are
+zeroed after encoding because DOCA 3.2 leaves them uninitialized. Optional
+`DAQIRI_PREBUILT_AUDIT=1` reads back these WQEs against a CPU oracle before the
+window; use it for preflight, not performance runs. Both prebuilt methods exclude
+descriptor construction from the deadline budget and include GPU packet
+construction and publication. L3/L4 checksum offloads are enabled on both.
+
+`--method` accepts one name, a comma-separated subset, or `all`; a subset retains
+randomized method order for a longer comparison of the selected pair.
+The first five launch the same packet-producing kernel for every packet;
+`gpunetio` uses that producer followed by GPU WAIT+SEND. The persistent flag
+variant and `gpunetio-persistent` keep a producer kernel running and accept one
+command at a time. Compare each variant against its matching producer family.
+Mapped flags use aligned single-writer stores with system release/acquire and
+system fences after packet construction. The callback publishes readiness;
+the queue-owning CPU thread performs DAQIRI TX. No callback invokes CUDA or
+DAQIRI APIs.
+
+For a GPU-only readiness diagnostic, add `--notification-only --method all` and
+use a separate CSV path. This skips NIC initialization and PHC checks, verifies
+the GPU-built header/marker, and reports CPU launch/command-to-ready latency
+plus GPU construction duration. It measures all six CPU notification variants
+without network traffic; its CSV cannot establish TX/RX deadline behavior and
+is intentionally incompatible with the hardware deadline analyzer.
+
+`--lead-ns` is the budget from the CPU command epoch through GPU packet
+construction and TX submission to the requested NIC deadline. It includes
+launch or command-delivery latency. The CSV records CPU preparation completion
+in `cpu_prepared_ns` and command-delivery start in `gpu_command_ns`;
+`launch_ns` is the common budget start.
+When any prepared-window method is selected, all selected methods instead use
+fixed command epochs, recorded by `scheduled_commands=1`. Late CPU dispatch
+counts against the deadline. `--prepare-window N` (default 32, range 1–32) sets
+the window size and requires enough TX slots and a nonzero packet interval.
+Each prebuilt method prepares its window's pointers, lengths, deadlines, and
+WQEs before its first command, so those values must be known ahead of time. The GPU caches
+the queue addresses and reads tickets from GPU memory, removing the per-packet
+descriptor-ready handshake. The budget still includes GPU command delivery,
+packet construction, and publication. Windows have a 20 ms initial preparation
+allowance and 500 us subsequent allowances; a preparation overrun remains a
+deadline miss. Other selected methods use the same command epochs and gaps.
+`prepared_window` records the prepared method's window size; other methods record
+zero. The analyzer rejects pooling scheduled and observed command epochs.
+This is a serial latency test with one published packet outstanding, with `--interval-us 100` by default, not a sustained-rate or burst
+deadline result. Change `packet_size` (66–8192 L2 bytes, excluding FCS) and both
+regions' `buf_size` in separate configs to measure size sensitivity; ensure the
+cabled path's MTU supports the frame size. CPU affinity comes from `cpu_core`; GPU
+ordinal comes from `gpu` and must match the device MR's affinity. `--timeout-ms`
+defaults to 100; GPUNetIO CQ waits have a one-second GPU guard. A blocking CUDA
+event wait cannot be interrupted by the host timeout. For long runs, use an
+external process timeout as well.
+
+The CSV preserves raw `deadline_ns`, `tx_completion_ns`, and `rx_hw_ns`, plus
+sequence, method, repetition, lead, CPU observation/submission times, GPU timer
+values, interpolated PHC/system offsets, clock uncertainty, and failure status.
+For the GDRCopy method, `gpu_first_doorbell_ns` records the first MMIO store;
+it is zero for other methods, whose submit-return times are different events.
+GPU `%globaltimer` values are a separate clock domain: subtract GPU values only
+from other GPU values. CPU observation time is diagnostic; deadline verdicts use
+the hardware timestamps. Method and lead orders are randomized with `--seed`.
+Warmup packets are excluded; missing completions/receives remain in the sample
+denominator.
+
+Analyze with a fixed deadline tolerance and an **independently measured**, common
+RX path allowance. For example, if a separate calibration established a 1000 ns
+path allowance, the following allows 100 ppm excess misses at 2000 ns tolerance:
+
+```bash
+python3 scripts/analyze_tx_deadlines.py tx-deadline.csv \
+  --tolerance-ns 2000 --rx-path-ns 1000 --margin 0.0001 --json tx-deadline.json
+```
+
+The report includes signed TX/deadline and RX/deadline errors (min, p50, p99,
+p99.9, max), RX-minus-TX, missing samples, and late counts. RX error subtracts
+the common path allowance; TX error does not. A sample misses if either bound
+is exceeded or either timestamp is missing. TX CQ time is the NIC's completion
+measurement point, not calibrated wire departure: early values and negative
+RX-minus-TX values are retained, and RX arrival provides a separate check.
+See [TX completion semantics](../api-reference/cpp.md#transmit-completion-timestamps).
+
+The analyzer selects a method using repetition zero only, then evaluates later
+repetitions against the matching GPUNetIO family; GDRCopy prebuilt requires
+`gpunetio-prebuilt-persistent`, rather than charging SDK WQE construction to its
+deadline budget. It rejects unequal selection
+conditions, duplicate input, interrupted benchmark files, and clock uncertainty
+larger than the tolerance. CQ faults abort a run; discard its incomplete CSV.
+Its approximate Wilson bounds include a Bonferroni adjustment across validation
+comparisons and count clock-ambiguous DAQIRI samples as misses while using only
+certain GPUNetIO misses for the acceptance bound. The bounds assume independent
+packet misses within each repetition.
+Inspect per-repeat tails for correlated stalls before interpreting confidence.
+Exit status 2 means noninferiority was not demonstrated, including missing
+baselines or insufficient samples. Zero observed misses cannot establish a
+zero excess probability; choose the acceptable margin before collecting data.
+No notification method is declared best without measured selection data.
+
 ### Direct-polling latency sweep
 
 `daqiri_bench_raw_latency` measures the raw ibverbs path with one packet
@@ -396,8 +559,8 @@ REPEATS=3 examples/run_cabled_loopback_bench.sh --platform igx-thor ibverbs late
 
 Use `--platform dgx-spark` on Spark. See the script header for optional settings.
 
-`tx_call_to_rx_hw_ns` is a loopback-ingress proxy, not an actual TX egress timestamp: DAQIRI does
-not currently expose a TX hardware timestamp, so this value also contains the cable and NIC RX
+`tx_call_to_rx_hw_ns` is a loopback-ingress proxy, not an actual TX egress timestamp: this
+latency binary does not request TX completion timestamps, so this value also contains the cable and NIC RX
 latency. When `ptp_device` is set, the benchmark uses Linux's non-mutating extended
 PHC/system cross-timestamp ioctl before and after each size and interpolates the offset for every
 sample. It prints the maximum measured cross-clock uncertainty. Without `ptp_device`, the NIC PHC

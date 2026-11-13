@@ -75,6 +75,9 @@ those variants the primary teaching examples.
 
     The benchmark reports `send_tx_burst()` call-to-return time, submit-to-hardware-RX time, hardware-RX-to-`get_rx_burst()` return time, and total submit-to-application time. It supports host-pinned and GPU buffers; set `bench_latency.ptp_device` to calibrate the NIC clock against `CLOCK_REALTIME`. See [Direct-polling latency sweep](../benchmarks/raw_benchmarking.md#direct-polling-latency-sweep) for the measurement boundaries and the runner that compares direct and indirect polling.
 
+??? question "I want to compare accurate-send deadlines against GPUNetIO"
+    Use [`daqiri_bench_tx_deadline.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_tx_deadline.yaml) with `daqiri_bench_tx_deadline`. It constructs packets on the GPU and compares direct CPU TX after GPU notification against GPU-initiated TX, using packet-matched TX completion and RX hardware timestamps. See [GPU packet TX deadlines](../benchmarks/raw_benchmarking.md#gpu-packet-tx-deadlines).
+
 ??? question "2. I have out-of-order UDP packets that need to be reordered on the GPU"
     DAQIRI's reorder pipeline places packet payloads at the correct offset in a GPU buffer, so a downstream consumer sees a fully ordered stream. Software reorder uses a CUDA kernel and remains the default. On ConnectX-7 or newer hardware, the ibverbs engine can instead use the flex parser for first-DMA placement when the sequence value cycles over a finite ring (`reorder_engine: hw`, `cyclic_sequence: true`). Configs run on `daqiri_bench_raw_reorder_seq` unless 2.4 applies. Sub-questions:
 

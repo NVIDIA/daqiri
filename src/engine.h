@@ -20,6 +20,7 @@
 #include "src/daqiri_ring.h"
 #include <cuda.h>
 #include <daqiri/types.h>
+#include <daqiri/gpu_tx.cuh>
 #include <optional>
 #include <vector>
 
@@ -208,6 +209,7 @@ class Engine {
   virtual Status clone_tx_burst(const BurstParams* source, uint32_t shared_segment_mask,
                                 BurstParams** clone);
   virtual Status send_tx_burst(BurstParams* burst) = 0;
+  virtual Status prepare_tx_burst_gpu(BurstParams* burst, GpuTxSubmission* submission);
   virtual Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst);
   virtual Status add_endpoint(const RawUdpEndpointConfig& config, EndpointId* endpoint_id);
   virtual Status get_endpoint_id(const std::string& name, EndpointId* endpoint_id);

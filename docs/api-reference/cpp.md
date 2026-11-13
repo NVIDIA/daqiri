@@ -684,6 +684,65 @@ Other failures leave ownership with the caller, who must retry or free the burst
 A second direct acquisition before the pending packet is sent or freed
 returns `NOT_READY`; zero- or multi-packet direct requests return `INVALID_PARAMETER`.
 
+### GPU doorbell TX
+
+Raw ibverbs direct, cyclic queues can prepare a packet on the CPU and let the
+GPU submit it after constructing the complete frame. All queue segments must
+be device memory on the current CUDA GPU. This path supports accurate SEND
+scheduling and TX completion timestamps; it does not support named endpoints.
+Other engines return `NOT_SUPPORTED`.
+
+`prepare_tx_burst_gpu(burst, &submission)` builds the WAIT/SEND WQEs and returns
+an opaque `GpuTxSubmission`. It publishes neither the producer record nor the
+NIC doorbell. On success, DAQIRI owns the burst; on every failure, the caller
+retains it and the output descriptor is cleared. First use maps the NIC UAR and
+doorbell-record page into the current CUDA context. Failure to map returns
+`NOT_SUPPORTED`, without falling back to CPU submission. No DOCA SDK is needed.
+
+Include `<daqiri/gpu_tx.cuh>` in CUDA code, and pass the descriptor to the same
+CUDA context. All threads writing the packet must fence their stores at system
+scope and synchronize before **one thread** calls `daqiri::submit_tx_gpu()`.
+For a single packet-producing block:
+
+```cuda
+// After this block has constructed every packet byte:
+__threadfence_system();
+__syncthreads();
+if (threadIdx.x == 0) daqiri::submit_tx_gpu(submission);
+```
+
+The GPU helper requires SM 70+ and CUDA 12.2+ for its MMIO store. Publish the
+CPU-prepared descriptor through a CUDA launch/copy dependency, or an aligned
+system release/acquire command flag for a persistent kernel. Each descriptor
+must be submitted exactly once and cannot be canceled after preparation.
+Do not modify or free a successfully prepared burst. Multiple descriptors may
+be prepared up to the queue's packet and SQ credit limits. Submit them in
+preparation order, and only after every packet through that descriptor is fully
+constructed: the doorbell publishes a cumulative prefix of the queue.
+`get_packet_tx_timestamp()` and ordinary direct completion polling reclaim sends,
+including when no timestamp was requested. CPU SEND and drain calls cannot
+publish pending GPU packets; CPU SEND returns `NOT_READY`, retaining the caller's
+burst, until all prepared GPU sends complete. Synchronize GPU users before removing the queue, shutting
+down DAQIRI, or destroying the CUDA context.
+
+For a persistent producer, cache `gpu_tx_queue(submission)` on the GPU once and
+copy a bounded array of `gpu_tx_ticket(submission)` values into GPU memory ahead
+of packet construction. Call `submit_tx_gpu(queue, ticket)` after constructing
+each packet. This avoids fetching a complete descriptor from host memory on
+every send. Keep the cached queue within its CUDA context and queue lifetime;
+publish each ticket copy before its GPU consumer reads it. The helper uses a
+system release fence and an early MMIO notification, updates the producer record,
+then rings again for the NIC recovery path. Its optional timestamp argument
+reports the first MMIO store's GPU globaltimer value for diagnostics.
+
+The [deadline benchmark](../benchmarks/raw_benchmarking.md#gpu-packet-tx-deadlines)
+contains launched and persistent examples and compares hardware TX completion
+and RX arrival timestamps against both CPU submission and GPUNetIO. Its
+`daqiri-gdrcopy-prebuilt` method owns a separate native GPU SQ, prepublished
+through GDRCopy; `prepare_tx_burst_gpu()` retains the production engine's host SQ.
+See [GPU packet TX deadlines](../benchmarks/raw_benchmarking.md#gpu-packet-tx-deadlines)
+for the build requirements and matched prebuilt baseline.
+
 ### Shared TX segments
 
 Raw ibverbs indirect queues with `buffer_mode: shared` can clone a complete,
@@ -1113,6 +1172,7 @@ workflow sections above show the common call order and ownership rules.
 | `set_connection_id(burst, conn_id)` | Attach a transport connection ID to a TX burst (socket/RDMA). |
 | `clone_tx_burst(source, mask, &clone)` | Retain selected TX segments and privately copy CPU segments on shared-mode raw ibverbs queues. |
 | `send_tx_burst(burst)` | Enqueue a populated TX burst. |
+| `prepare_tx_burst_gpu(burst, &submission)` | Prepare one direct raw ibverbs packet for GPU doorbell submission; success transfers burst ownership. |
 | `send_tx_burst(endpoint_id, queue_id, burst)` | Inline cached raw-UDP headers, gather payload pointers, and enqueue an ibverbs burst on the selected queue. |
 | `add_endpoint(config, &endpoint_id)` | Add a named raw-UDP endpoint to the active ibverbs engine. |
 | `get_endpoint_id(name, &endpoint_id)` | Resolve an endpoint name outside the TX hot path. |

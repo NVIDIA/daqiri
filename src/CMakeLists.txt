@@ -253,6 +253,7 @@ install(
     FILES_MATCHING
       PATTERN "*.h"
       PATTERN "*.hpp"
+      PATTERN "*.cuh"
 )
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/spdlog/include/spdlog/spdlog.h")
   install(

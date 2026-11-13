@@ -279,6 +279,8 @@ need to enable a specific feature or adjust the build for a particular host.
 | `DAQIRI_ENGINE` | `"dpdk ibverbs"` | Space-separated optional engines to compile. Valid values are `dpdk` and `ibverbs`; Linux UDP/TCP sockets are always built in. Use a smaller set only when packaging a narrower build. |
 | `DAQIRI_IBVERBS_DLOPEN` | `OFF` | Load the raw ibverbs and RoCE dependencies through versioned glue DSOs at engine initialization. Useful when statically linking DAQIRI while using shared RDMA libraries at runtime. |
 | `DAQIRI_BUILD_EXAMPLES` | `ON` | Builds the `daqiri_bench_*` executables under `build/examples/`. Leave on for smoke tests and benchmark workflows. The `daqiri_config_validate` tool is always built and installed, including when this option is `OFF`. |
+| `DAQIRI_BENCH_GDRCOPY` | `OFF` | Adds the prepublished GDRCopy GPU-SQ method to `daqiri_bench_tx_deadline`. Requires the ibverbs engine, GDRCopy headers/library (2.5.1 tested; use `GDRCOPY_ROOT` for a custom prefix), and `gdrdrv` at runtime. No CUDA-copy fallback. |
+| `DAQIRI_BENCH_GPUNETIO` | `OFF` | Adds DOCA GPUNetIO TX baselines to `daqiri_bench_tx_deadline` when examples are enabled. Requires DOCA 3.2.x `doca-gpunetio`, `doca-eth`, and `doca-common` pkg-config packages. |
 | `DAQIRI_BUILD_APPLICATIONS` | `OFF` | Builds heavier end-to-end examples under `applications/`, currently the TensorRT ResNet inference app. Requires the extra application dependencies. |
 | `DAQIRI_BUILD_PYTHON` | `OFF` | Builds pybind11 Python bindings. Enable only when you need `import daqiri`. |
 | `BUILD_TESTING` | `ON` | Builds and registers the hardware-free C++ tests under `tests/cpp/` with CTest. Set to `OFF` to omit test targets from a production-only build. |

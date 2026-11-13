@@ -23,8 +23,8 @@ void require(bool condition, const char* message) {
 // CQ, and doorbell memory. No NIC, GPU, CUDA context, or verbs calls are needed.
 class IbverbsEngineTxTestPeer {
  public:
-  static void tx_timestamps(int segments, bool endpoint, bool direct, bool scheduled,
-                            bool realtime) {
+  static void tx_timestamps(int segments, bool endpoint, bool direct, bool scheduled, bool realtime,
+                            bool gpu = false) {
     IbverbsEngine engine;
     engine.max_batch_ = 4;
     engine.cfg_.rx_meta_buffers_ = engine.cfg_.tx_meta_buffers_ = 8;
@@ -56,6 +56,12 @@ class IbverbsEngineTxTestPeer {
     q.dv_qp.dbrec = sq_db.data();
     q.dv_qp.bf.reg = bf.data();
     q.dv_qp.bf.size = 256;
+    if (gpu) {
+      // Identity-address mock mappings; the production descriptor builder and
+      // credit/completion logic run without registering CUDA or touching a NIC.
+      q.gpu_uar_mapping = std::make_shared<GpuTxMapping>();
+      q.gpu_record_mapping = std::make_shared<GpuTxMapping>();
+    }
     q.dv_txcq.buf = cq.data();
     q.dv_txcq.cqe_cnt = cq.size();
     q.dv_txcq.cqe_size = sizeof(mlx5_cqe64);
@@ -118,7 +124,41 @@ class IbverbsEngineTxTestPeer {
       if (iteration == 1)
         require(engine.release_tx_timestamp(ids[0]) == Status::SUCCESS,
                 "pending timestamp release failed");
-      require(engine.send_tx_burst(burst) == Status::SUCCESS, "timestamp send failed");
+      if (gpu) {
+        const auto before_sq_db = sq_db;
+        const auto before_bf = bf;
+        GpuTxSubmission submission{};
+        engine.post_tx_burst(q, burst, &submission);
+        q.direct_pending = nullptr;
+        engine.tx_meta_pool_->put(burst);
+        require(sq_db == before_sq_db && bf == before_bf,
+                "CPU published a GPU-owned packet before it was ready");
+        require(submission.record == reinterpret_cast<uint64_t>(&sq_db[MLX5_SND_DBR]) &&
+                    submission.doorbell ==
+                        reinterpret_cast<uint64_t>(bf.data()) + (q.bf_offset ^ q.dv_qp.bf.size) &&
+                    be32toh(submission.record_value) == (q.sq_pi & 0xffff),
+                "incorrect GPU doorbell descriptor");
+        const uint32_t words[2] = {htobe32(static_cast<uint32_t>(q.sq_pi << 8)),
+                                   htobe32(q.sqn << 8)};
+        uint64_t expected_db = 0;
+        memcpy(&expected_db, words, sizeof(expected_db));
+        require(submission.doorbell_value == expected_db, "wrong GPU doorbell WQE index/QPN");
+        require(!engine.emit_direct_drain_nop(q) && engine.direct_tx_has_capacity(q, 2),
+                "prepared GPU sends must block CPU publication but allow preparation ahead");
+        const auto handle = gpu_tx_queue(submission);
+        const auto ticket = gpu_tx_ticket(submission);
+        require(handle.doorbell == reinterpret_cast<uint64_t>(bf.data()) &&
+                    handle.record == submission.record &&
+                    handle.doorbell + ticket.doorbell_offset == submission.doorbell &&
+                    ticket.doorbell_value == submission.doorbell_value &&
+                    ticket.record_value == submission.record_value,
+                "cached GPU queue/ticket conversion failed");
+        // Stand in for the GPU's ordered DBREC/MMIO stores, then inject its CQE.
+        *reinterpret_cast<uint32_t*>(submission.record) = submission.record_value;
+        *reinterpret_cast<uint64_t*>(submission.doorbell) = submission.doorbell_value;
+      } else {
+        require(engine.send_tx_burst(burst) == Status::SUCCESS, "timestamp send failed");
+      }
       if (!direct) {
         void* raw = nullptr;
         require(q.send_ring->dequeue(&raw), "missing timestamp handoff");
@@ -152,6 +192,50 @@ class IbverbsEngineTxTestPeer {
         }
       }
       require(q.completed_tail.load() == q.alloc_head, "timestamp sends leaked credits");
+    }
+    if (gpu) {
+      auto* untracked = allocate();
+      const auto send = q.sq_pi;
+      GpuTxSubmission submission{};
+      engine.post_tx_burst(q, untracked, &submission);
+      q.direct_pending = nullptr;
+      engine.tx_meta_pool_->put(untracked);
+      const auto* ctrl = reinterpret_cast<mlx5_wqe_ctrl_seg*>(sq.data() + (send & 31) * 64);
+      require(ctrl->fm_ce_se == MLX5_WQE_CTRL_CQ_UPDATE,
+              "GPU submission without a timestamp must still signal completion");
+      inject_completion(send, 123);
+      engine.poll_tx_completions(q);
+      require(engine.direct_tx_has_capacity(q, 2) && q.gpu_pending_wqebb <= q.sq_completed,
+              "GPU completion did not unblock direct queue allocation");
+      // Prepare a whole bounded window before any GPU publication/completion.
+      const auto db_before = sq_db;
+      const auto bf_before = bf;
+      std::array<uint64_t, 8> sends{};
+      for (size_t i = 0; i < sends.size(); ++i) {
+        auto* ahead = allocate();
+        sends[i] = q.sq_pi;
+        engine.post_tx_burst(q, ahead, &submission);
+        q.direct_pending = nullptr;
+        engine.tx_meta_pool_->put(ahead);
+      }
+      require(sq_db == db_before && bf == bf_before && !engine.direct_tx_has_capacity(q, 2) &&
+                  !engine.emit_direct_drain_nop(q),
+              "prepared window published early or exceeded its packet credits");
+      inject_completion(sends[0], 123);
+      engine.poll_tx_completions(q);
+      auto* cpu = allocate();
+      const auto pi_before = q.sq_pi;
+      require(engine.send_tx_burst(cpu) == Status::NOT_READY && q.direct_pending == cpu &&
+                  q.sq_pi == pi_before && sq_db == db_before && bf == bf_before,
+              "CPU SEND published an unfinished GPU window or consumed its caller's burst");
+      engine.free_all_packets(cpu);
+      engine.free_tx_burst(cpu);
+      for (size_t i = 1; i < sends.size(); ++i) {
+        inject_completion(sends[i], 123 + i);
+        engine.poll_tx_completions(q);
+      }
+      require(q.alloc_head == q.completed_tail.load() && engine.direct_tx_has_capacity(q, 2),
+              "prepared window did not restore packet/SQ credits");
     }
     // Cancellation, capacity exhaustion, and invalid arguments never yield success.
     auto* burst = allocate();
@@ -748,6 +832,27 @@ class IbverbsEngineTxTestPeer {
     BurstParams burst{};
     burst.hdr.hdr.num_pkts = 1;
     burst.hdr.hdr.num_segs = 3;
+    GpuTxSubmission gpu_submission{};
+    gpu_submission.doorbell = 123;
+    require(engine.prepare_tx_burst_gpu(nullptr, &gpu_submission) == Status::NULL_PTR &&
+                gpu_submission.doorbell == 0,
+            "null GPU preparation did not clear its output");
+    require(engine.prepare_tx_burst_gpu(&burst, nullptr) == Status::NULL_PTR,
+            "null GPU descriptor accepted");
+    gpu_submission.doorbell = 123;
+    require(engine.prepare_tx_burst_gpu(&burst, &gpu_submission) == Status::INVALID_PARAMETER &&
+                gpu_submission.doorbell == 0,
+            "unknown GPU queue accepted");
+    q.state = ResourceState::ACTIVE;
+    engine.tx_queue_table_[0][0].store(&q);
+    require(engine.prepare_tx_burst_gpu(&burst, &gpu_submission) == Status::NOT_SUPPORTED &&
+                q.direct_pending == nullptr,
+            "GPU submission accepted an indirect queue");
+    q.poll_mode = QueuePollMode::DIRECT;
+    require(engine.prepare_tx_burst_gpu(&burst, &gpu_submission) == Status::INVALID_PARAMETER &&
+                q.direct_pending == nullptr && q.sq_pi == 0,
+            "GPU submission accepted an unallocated burst");
+    engine.tx_queue_table_[0][0].store(nullptr);
     std::array<void*, 3> pointers{reinterpret_cast<void*>(0x1000), reinterpret_cast<void*>(0x2000),
                                   reinterpret_cast<void*>(0x3000)};
     std::array<uint32_t, 3> lengths{16, 16, 16};
@@ -783,6 +888,11 @@ class IbverbsEngineTxTestPeer {
 
 int main() {
   try {
+    for (int segments : {1, 4})
+      for (bool scheduled : {false, true})
+        for (bool realtime : {false, true})
+          daqiri::IbverbsEngineTxTestPeer::tx_timestamps(segments, false, true, scheduled, realtime,
+                                                         true);
     for (int segments : {1, 4})
       for (bool endpoint : {false, true})
         for (bool direct : {false, true})

@@ -1,0 +1,67 @@
+# Cabled GPU TX accurate-send comparison. Replace PCI addresses, MACs, CPU,
+# and both PHCs; synchronize the NIC clocks and CLOCK_REALTIME first.
+# All packet bytes are constructed on GPU, including Ethernet/IP/UDP headers.
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    engine: "ibverbs"
+    master_core: <3>
+    log_level: "info"
+    memory_regions:
+    - name: "Deadline_TX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 1024
+      buf_size: 256
+    - name: "Deadline_RX_CPU"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 4096
+      buf_size: 256
+    interfaces:
+    - name: "deadline_tx"
+      address: <0000:00:00.0>
+      tx:
+        accurate_send: true
+        queues:
+        - name: "deadline_tx_q"
+          id: 0
+          poll_mode: "direct"
+          memory_regions: ["Deadline_TX_GPU"]
+    - name: "deadline_rx"
+      address: <0000:00:00.1>
+      rx:
+        hardware_timestamps: true
+        flow_isolation: true
+        queues:
+        - name: "deadline_rx_q"
+          id: 0
+          poll_mode: "direct"
+          memory_regions: ["Deadline_RX_CPU"]
+        flows:
+        - name: "deadline_udp"
+          id: 1
+          action: {type: queue, id: 0}
+          match: {udp_src: 4096, udp_dst: 4096}
+
+bench_tx_deadline:
+  tx_interface_name: "deadline_tx"
+  rx_interface_name: "deadline_rx"
+  tx_queue_id: 0
+  rx_queue_id: 0
+  cpu_core: <5>
+  gpu: 0
+  tx_ptp_device: </dev/ptpN>
+  rx_ptp_device: </dev/ptpM>
+  max_clock_offset_ns: 1000
+  max_clock_bracket_ns: 5000
+  packet_size: 256
+  eth_src_addr: <00:00:00:00:00:01>
+  eth_dst_addr: <00:00:00:00:00:02>
+  ip_src_addr: "192.0.2.1"
+  ip_dst_addr: "192.0.2.2"
+  udp_src_port: 4096
+  udp_dst_port: 4096

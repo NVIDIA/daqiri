@@ -52,6 +52,7 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_raw_sw_loopback.yaml
   daqiri_bench_raw_hw_loopback_ibverbs.yaml
   daqiri_bench_raw_latency_ibverbs.yaml
+  daqiri_bench_tx_deadline.yaml
   daqiri_example_named_endpoints_tx_rx.yaml
   daqiri_example_dynamic_rx_flow.yaml
   daqiri_example_gds_write_sw_loopback.yaml
@@ -107,6 +108,46 @@ target_link_libraries(daqiri_bench_raw_latency PRIVATE CUDA::cudart)
 set_target_properties(daqiri_bench_raw_latency PROPERTIES
   BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
 )
+
+# Optional GPUNetIO comparison requires DOCA 3.2's Ethernet device headers.
+option(DAQIRI_BENCH_GPUNETIO "Build the TX deadline benchmark with DOCA GPUNetIO 3.2" OFF)
+add_executable(daqiri_bench_tx_deadline tx_deadline_bench.cpp tx_deadline_gpu.cu)
+link_daqiri_bench(daqiri_bench_tx_deadline)
+target_link_libraries(daqiri_bench_tx_deadline PRIVATE CUDA::cudart)
+set_target_properties(daqiri_bench_tx_deadline PROPERTIES
+  CUDA_STANDARD 17
+  CUDA_STANDARD_REQUIRED ON
+  CUDA_ARCHITECTURES "${DAQIRI_EXAMPLES_CUDA_ARCHITECTURES}"
+  BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
+)
+# The benchmark keeps only the measured GDRCopy prepublished GPU-SQ path.
+# There is no CUDA-copy fallback when GDRCopy/gdrdrv is unavailable.
+option(DAQIRI_BENCH_GDRCOPY "Build the prepublished GDRCopy GPU TX deadline method" OFF)
+if(DAQIRI_BENCH_GDRCOPY)
+  if(NOT TARGET daqiri_ibverbs)
+    message(FATAL_ERROR "DAQIRI_BENCH_GDRCOPY requires DAQIRI_ENGINE=ibverbs")
+  endif()
+  find_path(GDRCOPY_INCLUDE_DIR gdrapi.h HINTS ${GDRCOPY_ROOT} PATH_SUFFIXES include REQUIRED)
+  find_library(GDRCOPY_LIBRARY gdrapi HINTS ${GDRCOPY_ROOT} PATH_SUFFIXES lib lib64 src REQUIRED)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(TX_DEADLINE_VERBS REQUIRED IMPORTED_TARGET libibverbs libmlx5)
+  target_sources(daqiri_bench_tx_deadline PRIVATE tx_deadline_gdr.cpp)
+  target_include_directories(daqiri_bench_tx_deadline PRIVATE ${GDRCOPY_INCLUDE_DIR})
+  target_compile_definitions(daqiri_bench_tx_deadline PRIVATE DAQIRI_BENCH_GDRCOPY=1)
+  target_link_libraries(daqiri_bench_tx_deadline PRIVATE
+    ${GDRCOPY_LIBRARY} PkgConfig::TX_DEADLINE_VERBS CUDA::cuda_driver)
+endif()
+if(DAQIRI_BENCH_GPUNETIO)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(TX_DEADLINE_DOCA REQUIRED IMPORTED_TARGET doca-gpunetio>=3.2 doca-eth doca-common)
+  if(TX_DEADLINE_DOCA_doca-gpunetio_VERSION VERSION_GREATER_EQUAL 3.3)
+    message(FATAL_ERROR "The TX deadline CQ adapter currently supports DOCA 3.2.x only")
+  endif()
+  target_sources(daqiri_bench_tx_deadline PRIVATE tx_deadline_gpunetio.cpp)
+  target_compile_definitions(daqiri_bench_tx_deadline PRIVATE
+    DAQIRI_BENCH_GPUNETIO=1 ALLOW_EXPERIMENTAL_API DOCA_ALLOW_EXPERIMENTAL_API)
+  target_link_libraries(daqiri_bench_tx_deadline PRIVATE PkgConfig::TX_DEADLINE_DOCA)
+endif()
 if(DAQIRI_ENABLE_OTEL_METRICS)
   find_package(opentelemetry-cpp CONFIG QUIET COMPONENTS sdk exporters_prometheus)
   if(TARGET opentelemetry-cpp::prometheus_exporter)
@@ -184,6 +225,7 @@ install(TARGETS
         daqiri_bench_raw_hds
         daqiri_bench_raw_gpudirect
         daqiri_bench_raw_latency
+        daqiri_bench_tx_deadline
         daqiri_bench_raw_reorder_seq
         daqiri_bench_raw_reorder_quantize
         daqiri_example_dynamic_rx_flow

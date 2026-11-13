@@ -1713,6 +1713,12 @@ Status Engine::clone_tx_burst(const BurstParams*, uint32_t, BurstParams** clone)
   return Status::NOT_SUPPORTED;
 }
 
+Status Engine::prepare_tx_burst_gpu(BurstParams*, GpuTxSubmission* submission) {
+  if (submission == nullptr) return Status::NULL_PTR;
+  *submission = {};
+  return Status::NOT_SUPPORTED;
+}
+
 Status Engine::send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst) {
   (void)endpoint_id;
   (void)queue_id;

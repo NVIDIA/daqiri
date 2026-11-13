@@ -18,6 +18,7 @@
 #pragma once
 #include <daqiri/logging.hpp>
 #include <daqiri/types.h>
+#include <daqiri/gpu_tx.cuh>
 #include <charconv>
 #include <cstddef>
 #include <initializer_list>
@@ -1088,6 +1089,27 @@ void set_num_packets(BurstParams *burst, int64_t num);
  *    GENERIC_FAILURE: direct RDMA posting failed; burst not consumed
  */
 Status send_tx_burst(BurstParams* burst);
+
+/**
+ * Prepare a raw ibverbs direct TX packet for submit_tx_gpu() in gpu_tx.cuh.
+ * CPU builds WAIT/SEND WQEs but publishes neither doorbell record nor MMIO.
+ * Supports cyclic queues with device-memory segments on the current CUDA GPU;
+ * named endpoints and other engines return NOT_SUPPORTED. First use maps the
+ * NIC UAR and doorbell record into the current CUDA context; mapping failure
+ * returns NOT_SUPPORTED without consuming the burst. No DOCA dependency.
+ *
+ * SUCCESS transfers burst ownership and returns a single-use descriptor. On
+ * every failure the caller retains the burst and *submission is cleared.
+ * Publish the descriptor to the same CUDA context, finish constructing the
+ * packet, then call submit_tx_gpu exactly once. Do not access/free the burst
+ * after success. Multiple submissions may be prepared up to the queue's packet
+ * and SQ credit limits. Submit them in preparation order, only through a
+ * contiguous prefix of fully constructed packets. CPU SEND/drain doorbells are
+ * blocked until all GPU-prepared sends complete. CPU completion polling and TX
+ * timestamp requests work as usual. Synchronize GPU users before queue removal,
+ * shutdown or CUDA-context destruction. A prepared descriptor cannot be canceled.
+ */
+Status prepare_tx_burst_gpu(BurstParams* burst, GpuTxSubmission* submission);
 
 /**
  * Clone an application-owned raw ibverbs shared-mode TX burst. Bit s shares

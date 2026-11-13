@@ -389,6 +389,13 @@ struct IbvRxQueue {
  * a completion worker; single-packet direct queues do posting and completion
  * reclaim on their owner thread. No per-packet memory allocation.
  */
+struct GpuTxMapping {
+  void* host = nullptr;
+  CUdeviceptr device = 0;
+  CUcontext context = nullptr;
+  ~GpuTxMapping();
+};
+
 struct IbvTxQueue {
   std::atomic<ResourceState> state{ResourceState::CREATING};
   std::atomic<uint64_t> active_users{0};
@@ -428,6 +435,9 @@ struct IbvTxQueue {
   uint64_t sq_completed = 0;
   uint32_t sq_capacity_wqebbs = 0;
   uint32_t bf_offset = 0;  // toggles between 0 and bf.size each doorbell
+  std::shared_ptr<GpuTxMapping> gpu_uar_mapping;
+  std::shared_ptr<GpuTxMapping> gpu_record_mapping;
+  uint64_t gpu_pending_wqebb = 0;  // Last prepared GPU WQEBB; blocks CPU publication until retired.
   // Direct, one-segment pinned-CPU-memory queues may embed small frames in the WQE.
   // The mlx5 QP must be created with matching inline capacity first.
   bool cpu_inline_enabled = false;
@@ -550,6 +560,7 @@ class IbverbsEngine : public Engine {
   Status get_rx_burst(BurstParams** burst, int port, int q) override;
   Status get_rx_burst(BurstParams** burst, int port) override;
   Status send_tx_burst(BurstParams* burst) override;
+  Status prepare_tx_burst_gpu(BurstParams* burst, GpuTxSubmission* submission) override;
   Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst) override;
   Status add_endpoint(const RawUdpEndpointConfig& config, EndpointId* endpoint_id) override;
   Status get_endpoint_id(const std::string& name, EndpointId* endpoint_id) override;
@@ -592,6 +603,12 @@ class IbverbsEngine : public Engine {
   friend class IbverbsEngineRxTestPeer;
 
   const detail::RawVerbsApi* verbs_ = nullptr;
+  std::mutex gpu_tx_mapping_mutex_;
+  // Providers suballocate doorbell records/UARs on shared pages. Register each
+  // page once and unregister before its last queue releases the verbs mapping.
+  std::map<std::pair<CUcontext, uintptr_t>, std::weak_ptr<GpuTxMapping>> gpu_tx_mappings_;
+  std::shared_ptr<GpuTxMapping> map_gpu_tx_page(void* address, CUcontext context, bool io);
+  Status map_gpu_tx_queue(IbvTxQueue& q);
   struct TxTimestampRequest {
     IbvTxQueue* queue = nullptr;
     Status status = Status::NOT_READY;
@@ -737,7 +754,7 @@ class IbverbsEngine : public Engine {
   Status setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf, const TxQueueConfig& qcfg);
   Status create_tx_raw_qp(IbvTxQueue& q);  // IBV_QPT_RAW_PACKET, RESET->RTS
   Status configure_tx_pacing(IbvTxQueue& q, uint64_t pacing_mbps);
-  void post_tx_burst(IbvTxQueue& q, BurstParams* burst);  // build send WQEs + ring doorbell
+  void post_tx_burst(IbvTxQueue& q, BurstParams* burst, GpuTxSubmission* submission = nullptr);
   void post_endpoint_inline_burst(IbvTxQueue& q, BurstParams* burst);
   Status prepare_endpoint_tx_burst(const IbvTxQueue& q, const EndpointFastPath& endpoint,
                                    BurstParams* burst);

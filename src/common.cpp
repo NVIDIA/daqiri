@@ -671,6 +671,11 @@ Status send_tx_burst(BurstParams* burst) {
   return g_daqiri_engine->send_tx_burst(burst);
 }
 
+Status prepare_tx_burst_gpu(BurstParams* burst, GpuTxSubmission* submission) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->prepare_tx_burst_gpu(burst, submission);
+}
+
 Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
   return g_daqiri_engine->send_tx_burst(endpoint_id, queue_id, burst);
