@@ -46,6 +46,8 @@ invalid_markers = (
     "missing-region",
     "id: 999",
     "duplicate_flow_id",
+    "msg_type: 0",
+    "val: 0x1234",
     "UNSUPPORTED_MARKER",
 )
 return_code = 0
@@ -206,6 +208,9 @@ def test_checked_in_default_selects_supported_cases(tmp_path: Path, engines: str
     assert "unknown-queue-key.yaml" in names
     assert "malformed-tx-flows.yaml" in names
     assert ("unknown-reorder-flow.yaml" in names) == ("ibverbs" in engines)
+    raw_engine = "dpdk" in engines or "ibverbs" in engines
+    assert ("ecpri-with-udp-match.yaml" in names) == raw_engine
+    assert ("flex-item-with-udp-match.yaml" in names) == raw_engine
 
 
 def test_checked_in_explicit_path_is_unfiltered_and_validator_failure_is_reported(
