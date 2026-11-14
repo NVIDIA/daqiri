@@ -35,6 +35,8 @@ STRING_PLACEHOLDERS = {
 SEMANTIC_FIXTURE = "examples/daqiri_bench_raw_rx_reorder_seq_batch.yaml"
 ZERO_ID_FIXTURE = "examples/daqiri_bench_raw_tx_rx.yaml"
 PARSER_FIXTURE = "examples/daqiri_bench_socket_udp_tx_rx.yaml"
+MATCH_FIXTURE = "examples/daqiri_bench_raw_tx_rx.yaml"
+UDP_MATCH = "            udp_src: 4096\n            udp_dst: 4096\n"
 FLOW_ID_DEFINITION = "          id: 100\n"
 REORDER_SECTION = "        reorder_configs:\n"
 DUPLICATE_FLOW = """\
@@ -110,6 +112,27 @@ def semantic_invalid_cases() -> dict[str, str]:
         ),
         "duplicate-static-flow-id.yaml": source.replace(
             REORDER_SECTION, DUPLICATE_FLOW + REORDER_SECTION, 1
+        ),
+    }
+
+
+def mixed_match_invalid_cases() -> dict[str, str]:
+    """Combine a raw UDP flow match with criteria from an exclusive match class."""
+
+    source = materialize_integer_placeholders(
+        (REPOSITORY_ROOT / MATCH_FIXTURE).read_text(encoding="utf-8")
+    )
+    if source.count(UDP_MATCH) != 1:
+        raise ValueError(f"{MATCH_FIXTURE}: match fixture markers changed")
+    return {
+        "ecpri-with-udp-match.yaml": source.replace(
+            UDP_MATCH, UDP_MATCH + "            ecpri:\n              msg_type: 0\n", 1
+        ),
+        "flex-item-with-udp-match.yaml": source.replace(
+            UDP_MATCH,
+            UDP_MATCH
+            + "            flex_item_id: 0\n            val: 0x1234\n            mask: 0xffff\n",
+            1,
         ),
     }
 
@@ -264,7 +287,11 @@ def main(argv: list[str] | None = None) -> int:
         if not args.paths:
             try:
                 compatibility_case = zero_id_multi_interface_case()
-                invalid_cases = {**semantic_invalid_cases(), **parser_invalid_cases()}
+                invalid_cases = {
+                    **semantic_invalid_cases(),
+                    **mixed_match_invalid_cases(),
+                    **parser_invalid_cases(),
+                }
             except (OSError, ValueError) as error:
                 print(error, file=sys.stderr)
                 return 1
