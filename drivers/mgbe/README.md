@@ -71,7 +71,15 @@ checksum in software and use a legal zero UDP checksum. Applications may also
 construct complete raw frames themselves. Hardware timestamps and optional
 runtime flow/resource operations return `NOT_SUPPORTED`.
 
-## Direct polling
+## Direct polling and a small latency working set
+
+[`config/daqiri_mgbe_latency.yaml`](config/daqiri_mgbe_latency.yaml) uses 64-entry
+RX/TX rings and DMA pools for a direct, one-outstanding-packet application.
+This reduces the active cyclic buffer working set; it also limits buffering
+against bursts or application stalls. Keep larger rings for throughput workloads
+and size all memory regions on the same port equally. This preset does not
+change the ordinary or indirect examples. Pin the application to an available
+isolated CPU before polling; the engine does not select an application CPU.
 
 Empty direct RX polls leave free burst metadata untouched. The engine validates
 burst addresses against its preallocated metadata array before accessing them;
