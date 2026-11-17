@@ -153,9 +153,13 @@ void Queue::rearm() {
 
 uint8_t* Queue::tx_buffer() {
   check_running();
-  reclaim();
+  // Prefer explicit/idle-poll completion service. Only pay for reclamation
+  // on the submission path when credits are exhausted, then retry safely.
   // Retain one unused descriptor to distinguish full and empty hardware rings.
-  if (tx_next_ - tx_clean_ >= mask_) return nullptr;
+  if (tx_next_ - tx_clean_ >= mask_) {
+    reclaim();
+    if (tx_next_ - tx_clean_ >= mask_) return nullptr;
+  }
   tx_reserved_ = true;
   return m_.tx_pool + size_t(tx_next_ & mask_) * m_.info.slot_size;
 }

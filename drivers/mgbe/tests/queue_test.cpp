@@ -136,6 +136,27 @@ void transmit_exhaustion_and_reuse() {
   q.cancel_tx();
 }
 
+void deferred_tx_reclamation() {
+  Fixture f;
+  mgbe::Queue q(f.mapping());
+  for (uint32_t turn = 0; turn < 64 * 32; ++turn) {
+    auto* data = q.tx_buffer();
+    assert(data == f.tx_pool.data() + (turn % 64) * 2048);
+    std::memset(data, int(turn & 255), 64);
+    assert(q.submit(64));
+    // Simulate completion, retaining the length bits as real MGBE does.
+    f.tx[turn % 64].word[3] = htole32(first_last | 64);
+    // Deliberately skip explicit reclaim to exercise pressure fallback and wrap.
+  }
+  assert(q.counters().tx_packets < 64 * 32);
+  q.reclaim();
+  assert(q.counters().tx_packets == 64 * 32);
+  // A reservation survives explicit completion service.
+  auto* reserved = q.tx_buffer();
+  q.reclaim();
+  assert(q.tx_buffer() == reserved);
+  q.cancel_tx();
+}
 void capabilities_and_faults() {
   Fixture f;
   auto m = f.mapping();
@@ -190,6 +211,7 @@ int main() {
   receive_ownership_and_wrap();
   malformed_and_partial_frames();
   transmit_exhaustion_and_reuse();
+  deferred_tx_reclamation();
   capabilities_and_faults();
   independent_tx_slots();
   std::cout << "MGBE queue ownership, wraparound, exhaustion and fault tests passed\n";

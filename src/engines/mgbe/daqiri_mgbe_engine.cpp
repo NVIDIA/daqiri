@@ -210,6 +210,23 @@ struct MgbeEngine::Impl {
       return current == token || (current == 0 && owner.compare_exchange_strong(
                                                       current, token, std::memory_order_relaxed));
     }
+    void reclaim_idle_tx() {
+      // RX and TX may have different owners. Never touch TX queue state from
+      // an unrelated RX owner or steal completions from an indirect worker.
+      if (tx_indirect || owners[1].load(std::memory_order_relaxed) != thread_token()) return;
+      // wait_for_tx_idle() may run on another thread under TxGuard. Inspect
+      // only atomic counters until that guard protects the queue internals.
+      if (completed.load(std::memory_order_relaxed) == submitted.load(std::memory_order_relaxed))
+        return;
+      TxGuard guard(*this);
+      if (guard) {
+        auto& q = port->queue(queue_id);
+        q.reclaim();
+        const auto count = q.counters().tx_packets;
+        if (count != completed.load(std::memory_order_relaxed))
+          completed.store(count, std::memory_order_release);
+      }
+    }
     Lease* take(bool tx) {
       if (tx) return engine.take_tx();
       void* ptr = nullptr;
@@ -637,7 +654,10 @@ Status MgbeEngine::get_rx_burst(BurstParams** burst, int port, int queue) {
   bool acquired = false;
   try {
     const size_t count = s.port->queue(s.queue_id).receive(m->packets.data(), rx_batch);
-    if (!count) return Status::NOT_READY;
+    if (!count) {
+      s.reclaim_idle_tx();
+      return Status::NOT_READY;
+    }
     m = s.take(false);
     acquired = true;
     m->count = count;

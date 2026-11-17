@@ -228,6 +228,30 @@ void metadata_address_validation() {
   assert(engine.get_packet_ptr(fresh, 0) == f.tx_pool.data());
   engine.free_tx_burst(fresh);
 }
+void idle_tx_reclamation_owner() {
+  for (bool shared_owner : {false, true}) {
+    Fixture f;
+    TestEngine engine(f);
+    assert(engine.set_config_and_initialize(config()));
+    auto* tx = tx_burst(engine);
+    assert(engine.set_packet_lengths(tx, 0, {60}) == Status::SUCCESS);
+    assert(engine.send_tx_burst(tx) == Status::SUCCESS);
+    f.tx[0].word[3] = htole32(first_last | 60);
+    auto poll = [&] {
+      BurstParams* rx = nullptr;
+      assert(engine.get_rx_burst(&rx, 0, 0) == Status::NOT_READY && !rx);
+    };
+    if (shared_owner)
+      poll();
+    else {
+      std::thread rx_owner(poll);
+      rx_owner.join();
+    }
+    // Only the same RX/TX owner may service completions on an empty RX poll.
+    assert((le32toh(f.tx[0].word[3]) == 0) == shared_owner);
+    assert(engine.wait_for_tx_idle(0) == Status::SUCCESS);
+  }
+}
 void tx_ownership_and_headers() {
   Fixture f;
   TestEngine engine(f);
@@ -753,6 +777,7 @@ int main() {
   rx_ownership();
   empty_poll_reuse();
   metadata_address_validation();
+  idle_tx_reclamation_owner();
   tx_ownership_and_headers();
   partial_failure();
   indirect_rx(false);

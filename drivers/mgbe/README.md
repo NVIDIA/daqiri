@@ -86,6 +86,14 @@ burst addresses against its preallocated metadata array before accessing them;
 state and direct-thread ownership checks still apply. Bursts remain invalid
 after submission, release or shutdown.
 
+Direct TX reserves an available slot without scanning completions first. When
+one thread owns both directions, empty RX polls service TX completions outside
+the response submission path. Separate RX/TX owners never service each other's
+queues. TX-only and continuously busy applications reclaim when the TX ring
+needs credits; `wait_for_tx_idle()` explicitly drains completions at shutdown.
+No hardware-owned TX slot is reused before its ordered completion and DMA read
+barrier. The indirect worker retains its normal completion and batching loop.
+
 ## Selecting indirect mode
 
 [`config/daqiri_mgbe_indirect.yaml`](config/daqiri_mgbe_indirect.yaml) uses one
