@@ -71,6 +71,11 @@ checksum in software and use a legal zero UDP checksum. Applications may also
 construct complete raw frames themselves. Hardware timestamps and optional
 runtime flow/resource operations return `NOT_SUPPORTED`.
 
+## Direct polling
+
+Empty direct RX polls leave free burst metadata untouched. Bursts remain invalid
+after submission, release or shutdown.
+
 ## Selecting indirect mode
 
 [`config/daqiri_mgbe_indirect.yaml`](config/daqiri_mgbe_indirect.yaml) uses one

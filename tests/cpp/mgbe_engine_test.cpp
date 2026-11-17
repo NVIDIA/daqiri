@@ -174,6 +174,28 @@ void rx_ownership() {
   engine.shutdown();
   assert(f.closed == 1 && !engine.is_initialized());
 }
+// Empty polls must not consume metadata, and held packets must survive polling.
+void empty_poll_reuse() {
+  Fixture f;
+  TestEngine engine(f);
+  assert(engine.set_config_and_initialize(config()));
+  for (size_t turn = 0; turn < 256; ++turn) {
+    BurstParams* b = nullptr;
+    for (int poll = 0; poll < 100; ++poll)
+      assert(engine.get_rx_burst(&b, 0, 0) == Status::NOT_READY && !b);
+    f.receive(turn % 64);
+    assert(engine.get_rx_burst(&b, 0, 0) == Status::SUCCESS);
+    const auto* data = static_cast<uint8_t*>(engine.get_packet_ptr(b, 0));
+    assert(data && data[0] == uint8_t(turn % 64 + 1));
+    for (int poll = 0; poll < 10; ++poll) {
+      BurstParams* empty = nullptr;
+      assert(engine.get_rx_burst(&empty, 0, 0) == Status::NOT_READY && !empty);
+      assert(engine.get_packet_length(b, 0) == 60 && data[0] == uint8_t(turn % 64 + 1));
+    }
+    engine.free_rx_burst(b);
+    assert(le32toh(f.rx[turn % 64].word[3]) & own);
+  }
+}
 void tx_ownership_and_headers() {
   Fixture f;
   TestEngine engine(f);
@@ -697,6 +719,7 @@ void partial_failure() {
 int main() {
   validation();
   rx_ownership();
+  empty_poll_reuse();
   tx_ownership_and_headers();
   partial_failure();
   indirect_rx(false);

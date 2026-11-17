@@ -599,14 +599,18 @@ Status MgbeEngine::get_rx_burst(BurstParams** burst, int port, int queue) {
     *burst = &static_cast<Impl::Lease*>(ptr)->burst;
     return Status::SUCCESS;
   }
-  auto* m = s.take(false);
-  if (!m) return Status::NO_FREE_BURST_BUFFERS;
+  // Keep free metadata untouched during empty polls. receive() writes only the
+  // packet array; reset() below does not touch that array. Do not consume a
+  // descriptor when every metadata lease is application-owned.
+  if (s.rx_direct_free.empty()) return Status::NO_FREE_BURST_BUFFERS;
+  auto* m = s.rx_direct_free.back();
+  bool acquired = false;
   try {
-    m->count = s.port->queue(s.queue_id).receive(m->packets.data(), rx_batch);
-    if (!m->count) {
-      s.put(*m);
-      return Status::NOT_READY;
-    }
+    const size_t count = s.port->queue(s.queue_id).receive(m->packets.data(), rx_batch);
+    if (!count) return Status::NOT_READY;
+    m = s.take(false);
+    acquired = true;
+    m->count = count;
     s.fill_rx(*m, 0);
     s.received.store(s.port->queue(s.queue_id).counters().rx_packets, std::memory_order_relaxed);
     s.rx_errors.store(s.port->queue(s.queue_id).counters().rx_errors, std::memory_order_relaxed);
@@ -614,7 +618,7 @@ Status MgbeEngine::get_rx_burst(BurstParams** burst, int port, int queue) {
     return Status::SUCCESS;
   } catch (const std::exception& error) {
     DAQIRI_LOG_ERROR("MGBE receive failed: {}", error.what());
-    s.put(*m);
+    if (acquired) s.put(*m);
     return Status::INTERNAL_ERROR;
   }
 }
