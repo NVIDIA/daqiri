@@ -15,7 +15,6 @@
 #include <cstring>
 #include <stdexcept>
 #include <thread>
-#include <unordered_map>
 #include <utility>
 #include <map>
 #include <set>
@@ -327,8 +326,8 @@ struct MgbeEngine::Impl {
   std::vector<std::unique_ptr<MgbePort>> ports;
   std::vector<std::unique_ptr<Channel>> channels;
   std::array<std::array<Channel*, MGBE_PMD_MAX_QUEUES>, 4> table{};
-  std::vector<std::unique_ptr<Lease>> storage;
-  std::unordered_map<BurstParams*, Lease*> leases;
+  std::unique_ptr<Lease[]> storage;
+  size_t metadata_count = 0;
   RingPtr tx_free{nullptr, &Ring::free};
   std::vector<Lease*> tx_direct_free;
   std::vector<std::thread> workers;
@@ -349,10 +348,16 @@ struct MgbeEngine::Impl {
     m.state.store(State::APP, std::memory_order_release);
   }
   Lease* find(BurstParams* burst) {
-    if (!burst) return nullptr;
-    const auto it = std::as_const(leases).find(burst);
-    if (it == leases.end()) return nullptr;
-    auto* m = it->second;
+    if (!burst || !metadata_count) return nullptr;
+    // Validate the address before dereferencing it: foreign/interior pointers
+    // must never be treated as engine-owned metadata. Slots are stable from
+    // initialization until all workers have stopped at shutdown.
+    const auto base = reinterpret_cast<uintptr_t>(&storage[0].burst);
+    const auto address = reinterpret_cast<uintptr_t>(burst);
+    if (address < base) return nullptr;
+    const auto offset = address - base;
+    if (offset % sizeof(Lease) || offset / sizeof(Lease) >= metadata_count) return nullptr;
+    auto* m = &storage[offset / sizeof(Lease)];
     if (m->state.load(std::memory_order_acquire) != State::APP) return nullptr;
     if (m->channel) return m->channel->claim(m->tx) ? m : nullptr;
     return !single_direct || single_direct->claim(true) ? m : nullptr;
@@ -364,7 +369,11 @@ struct MgbeEngine::Impl {
   Channel* target(Lease* m) {
     if (!m || !m->tx) return nullptr;
     auto* q = lookup(m->burst.hdr.hdr.port_id, m->burst.hdr.hdr.q_id);
-    if (!q || (m->channel && m->channel != q) || !q->valid_tx(m) || !q->claim(true)) return nullptr;
+    // find() has already checked the owner for a bound lease. A fresh TX
+    // lease still needs to claim the application-selected destination.
+    if (!q || (m->channel && m->channel != q) || !q->valid_tx(m) ||
+        (!m->channel && !q->claim(true)))
+      return nullptr;
     return q;
   }
   Lease* take_tx() {
@@ -386,13 +395,37 @@ struct MgbeEngine::Impl {
     else if (!tx_free->enqueue(&m))
       throw std::logic_error("MGBE TX metadata overflow");
   }
-  uint8_t* writable(BurstParams* burst, int index, size_t bytes) {
-    auto* m = find(burst);
+  uint8_t* writable(Lease* m, int index, size_t bytes) {
     auto* q = m ? m->channel : nullptr;
     if (!q || !q->valid_tx(m) || (!q->tx_indirect && q->reserved != m) || index < 0 ||
         size_t(index) >= m->count || !m->held[index] || bytes > q->capacity)
       return nullptr;
     return m->packets[index].data;
+  }
+  void release_packet(Lease* m, int i) {
+    if (!m || !m->channel || i < 0 || size_t(i) >= m->count || !m->held[i]) return;
+    auto& s = *m->channel;
+    try {
+      if (m->tx) {
+        Channel::TxGuard guard(s, true);
+        if (s.tx_indirect) {
+          if (!s.tx_free_slots->enqueue(m->slots[i])) throw std::logic_error("TX release overflow");
+        } else if (s.reserved == m) {
+          s.port->queue(s.queue_id).cancel_tx();
+          s.reserved = nullptr;
+        }
+        s.reservations.fetch_sub(1, std::memory_order_relaxed);
+      } else if (s.rx_indirect) {
+        if (!s.rx_returned->enqueue(&s.rx_slots[m->packets[i].slot]))
+          throw std::logic_error("RX release overflow");
+      } else {
+        s.port->queue(s.queue_id).release(m->packets[i]);
+      }
+    } catch (...) {
+      s.fault.store(true, std::memory_order_release);  // Reclaim the session at shutdown.
+    }
+    m->held[i] = false;
+    m->pointers[i] = nullptr;
   }
   struct Work {
     Channel* channel;
@@ -457,8 +490,9 @@ void MgbeEngine::initialize() {
   size_t count = 0;
   for (const auto& port : cfg_.ifs_) count += port.rx_.queues_.size();
   const size_t metadata = count * cfg_.rx_meta_buffers_ + cfg_.tx_meta_buffers_;
-  s.storage.reserve(metadata);
-  s.leases.reserve(metadata);
+  s.storage = std::make_unique<Impl::Lease[]>(metadata);
+  s.metadata_count = metadata;
+  size_t next_metadata = 0;
   s.channels.reserve(count);
   for (size_t port_id = 0; port_id < cfg_.ifs_.size(); ++port_id) {
     auto& port = cfg_.ifs_[port_id];
@@ -504,11 +538,9 @@ void MgbeEngine::initialize() {
       s.table[port_id][id] = &q;
       s.channels.push_back(std::move(channel));
       for (size_t i = 0; i < cfg_.rx_meta_buffers_; ++i) {
-        auto meta = std::make_unique<Impl::Lease>();
-        meta->channel = &q;
-        q.put(*meta);
-        s.leases.emplace(&meta->burst, meta.get());
-        s.storage.push_back(std::move(meta));
+        auto& meta = s.storage[next_metadata++];
+        meta.channel = &q;
+        q.put(meta);
       }
     }
   }
@@ -518,11 +550,9 @@ void MgbeEngine::initialize() {
   else
     s.tx_free = Impl::ring(cfg_.tx_meta_buffers_);
   for (size_t i = 0; i < cfg_.tx_meta_buffers_; ++i) {
-    auto meta = std::make_unique<Impl::Lease>();
-    meta->tx = true;
-    s.put_tx(*meta);
-    s.leases.emplace(&meta->burst, meta.get());
-    s.storage.push_back(std::move(meta));
+    auto& meta = s.storage[next_metadata++];
+    meta.tx = true;
+    s.put_tx(meta);
   }
   for (auto& port : s.ports) port->start();
   initialized_ = true;
@@ -563,8 +593,8 @@ void MgbeEngine::shutdown() {
   s.ports.clear();
   s.channels.clear();
   s.table = {};
-  s.leases.clear();
-  s.storage.clear();
+  s.metadata_count = 0;
+  s.storage.reset();
   s.tx_free.reset();
   s.tx_direct_free.clear();
   s.single_direct = nullptr;
@@ -723,7 +753,7 @@ void* MgbeEngine::get_packet_ptr(BurstParams* burst, int index) {
 }
 uint32_t MgbeEngine::get_packet_length(BurstParams* burst, int index) {
   auto* m = impl_->find(burst);
-  return get_packet_ptr(burst, index) ? m->lengths[index] : 0;
+  return m && index >= 0 && size_t(index) < m->count && m->held[index] ? m->lengths[index] : 0;
 }
 void* MgbeEngine::get_segment_packet_ptr(BurstParams* b, int s, int i) {
   return s == 0 ? get_packet_ptr(b, i) : nullptr;
@@ -747,29 +777,28 @@ Status MgbeEngine::set_packet_tx_time(BurstParams*, int, uint64_t) {
 }
 Status MgbeEngine::set_packet_lengths(BurstParams* b, int i,
                                       const std::initializer_list<int>& lens) {
-  if (lens.size() != 1 || *lens.begin() < 14 || !impl_->writable(b, i, size_t(*lens.begin())))
-    return Status::INVALID_PARAMETER;
   auto* m = impl_->find(b);
+  if (lens.size() != 1 || *lens.begin() < 14 || !impl_->writable(m, i, size_t(*lens.begin())))
+    return Status::INVALID_PARAMETER;
   b->hdr.hdr.nbytes = b->hdr.hdr.nbytes - m->lengths[i] + *lens.begin();
   m->lengths[i] = *lens.begin();
   return Status::SUCCESS;
 }
 Status MgbeEngine::set_eth_header(BurstParams* b, int i, char* destination) {
   if (!destination) return Status::NULL_PTR;
-  auto* p = reinterpret_cast<UDPIPV4Pkt*>(impl_->writable(b, i, sizeof(UDPIPV4Pkt)));
+  auto* m = impl_->find(b);
+  auto* p = reinterpret_cast<UDPIPV4Pkt*>(impl_->writable(m, i, sizeof(UDPIPV4Pkt)));
   if (!p) return Status::INVALID_PARAMETER;
   std::memcpy(p->eth.h_dest, destination, 6);
-  std::memcpy(p->eth.h_source,
-              impl_->find(b)->channel->port->queue(impl_->find(b)->channel->queue_id).info().mac,
-              6);
+  std::memcpy(p->eth.h_source, m->channel->port->queue(m->channel->queue_id).info().mac, 6);
   p->eth.h_proto = htons(ETH_P_IP);
   return Status::SUCCESS;
 }
 Status MgbeEngine::set_ipv4_header(BurstParams* b, int i, int length, uint8_t protocol,
                                    unsigned int source, unsigned int destination) {
-  auto* p = reinterpret_cast<UDPIPV4Pkt*>(impl_->writable(b, i, sizeof(UDPIPV4Pkt)));
-  if (!p || length < int(sizeof(iphdr)) ||
-      size_t(length) + sizeof(ethhdr) > impl_->find(b)->channel->capacity)
+  auto* m = impl_->find(b);
+  auto* p = reinterpret_cast<UDPIPV4Pkt*>(impl_->writable(m, i, sizeof(UDPIPV4Pkt)));
+  if (!p || length < int(sizeof(iphdr)) || size_t(length) + sizeof(ethhdr) > m->channel->capacity)
     return Status::INVALID_PARAMETER;
   p->ip = {};
   p->ip.version = 4;
@@ -784,8 +813,9 @@ Status MgbeEngine::set_ipv4_header(BurstParams* b, int i, int length, uint8_t pr
 }
 Status MgbeEngine::set_udp_header(BurstParams* b, int i, int length, uint16_t source,
                                   uint16_t destination) {
-  auto* p = reinterpret_cast<UDPIPV4Pkt*>(impl_->writable(b, i, sizeof(UDPIPV4Pkt)));
-  if (!p || length < int(sizeof(udphdr)) || size_t(length) + 34 > impl_->find(b)->channel->capacity)
+  auto* m = impl_->find(b);
+  auto* p = reinterpret_cast<UDPIPV4Pkt*>(impl_->writable(m, i, sizeof(UDPIPV4Pkt)));
+  if (!p || length < int(sizeof(udphdr)) || size_t(length) + 34 > m->channel->capacity)
     return Status::INVALID_PARAMETER;
   p->udp = {};
   p->udp.source = htons(source);
@@ -795,41 +825,19 @@ Status MgbeEngine::set_udp_header(BurstParams* b, int i, int length, uint16_t so
 }
 Status MgbeEngine::set_udp_payload(BurstParams* b, int i, void* data, int length) {
   if (length < 0 || (!data && length)) return Status::INVALID_PARAMETER;
-  auto* p = impl_->writable(b, i, sizeof(UDPIPV4Pkt) + size_t(length));
+  auto* m = impl_->find(b);
+  auto* p = impl_->writable(m, i, sizeof(UDPIPV4Pkt) + size_t(length));
   if (!p) return Status::INVALID_PARAMETER;
   if (length) std::memcpy(p + sizeof(UDPIPV4Pkt), data, length);
   return Status::SUCCESS;
 }
 void MgbeEngine::free_packet(BurstParams* b, int i) {
-  auto* m = impl_->find(b);
-  if (!m || !m->channel || i < 0 || size_t(i) >= m->count || !m->held[i]) return;
-  auto& s = *m->channel;
-  try {
-    if (m->tx) {
-      Impl::Channel::TxGuard guard(s, true);
-      if (s.tx_indirect) {
-        if (!s.tx_free_slots->enqueue(m->slots[i])) throw std::logic_error("TX release overflow");
-      } else if (s.reserved == m) {
-        s.port->queue(s.queue_id).cancel_tx();
-        s.reserved = nullptr;
-      }
-      s.reservations.fetch_sub(1, std::memory_order_relaxed);
-    } else if (s.rx_indirect) {
-      if (!s.rx_returned->enqueue(&s.rx_slots[m->packets[i].slot]))
-        throw std::logic_error("RX release overflow");
-    } else {
-      s.port->queue(s.queue_id).release(m->packets[i]);
-    }
-  } catch (...) {
-    s.fault.store(true, std::memory_order_release);  // Reclaim the session at shutdown.
-  }
-  m->held[i] = false;
-  m->pointers[i] = nullptr;
+  impl_->release_packet(impl_->find(b), i);
 }
 void MgbeEngine::free_all_packets(BurstParams* b) {
   auto* m = impl_->find(b);
   if (m)
-    for (size_t i = 0; i < m->count; ++i) free_packet(b, i);
+    for (size_t i = 0; i < m->count; ++i) impl_->release_packet(m, i);
 }
 void MgbeEngine::free_packet_segment(BurstParams* b, int s, int i) {
   if (s == 0) free_packet(b, i);
@@ -840,13 +848,13 @@ void MgbeEngine::free_all_segment_packets(BurstParams* b, int s) {
 void MgbeEngine::free_rx_burst(BurstParams* b) {
   auto* m = impl_->find(b);
   if (!m || m->tx) return;
-  free_all_packets(b);
+  for (size_t i = 0; i < m->count; ++i) impl_->release_packet(m, i);
   m->channel->put(*m);
 }
 void MgbeEngine::free_tx_burst(BurstParams* b) {
   auto* m = impl_->find(b);
   if (!m || !m->tx) return;
-  free_all_packets(b);
+  for (size_t i = 0; i < m->count; ++i) impl_->release_packet(m, i);
   impl_->put_tx(*m);
 }
 void MgbeEngine::free_rx_metadata(BurstParams* b) {

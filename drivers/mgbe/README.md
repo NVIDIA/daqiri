@@ -73,7 +73,9 @@ runtime flow/resource operations return `NOT_SUPPORTED`.
 
 ## Direct polling
 
-Empty direct RX polls leave free burst metadata untouched. Bursts remain invalid
+Empty direct RX polls leave free burst metadata untouched. The engine validates
+burst addresses against its preallocated metadata array before accessing them;
+state and direct-thread ownership checks still apply. Bursts remain invalid
 after submission, release or shutdown.
 
 ## Selecting indirect mode

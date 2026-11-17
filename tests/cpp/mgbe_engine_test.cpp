@@ -196,6 +196,38 @@ void empty_poll_reuse() {
     assert(le32toh(f.rx[turn % 64].word[3]) & own);
   }
 }
+void metadata_address_validation() {
+  Fixture f, other_f;
+  TestEngine engine(f), other(other_f);
+  assert(engine.set_config_and_initialize(config()));
+  assert(other.set_config_and_initialize(config()));
+  BurstParams foreign{};
+  assert(!engine.get_packet_ptr(&foreign, 0));
+  assert(engine.get_packet_length(&foreign, 0) == 0);
+  assert(engine.get_tx_packet_burst(&foreign) == Status::INVALID_PARAMETER);
+  auto* b = tx_burst(engine);
+  auto* alien = tx_burst(other);
+  assert(!engine.get_packet_ptr(alien, 0));
+  auto* interior = reinterpret_cast<BurstParams*>(reinterpret_cast<uint8_t*>(b) + 1);
+  assert(!engine.get_packet_ptr(interior, 0));
+  assert(engine.set_packet_lengths(interior, 0, {60}) == Status::INVALID_PARAMETER);
+  engine.free_tx_burst(interior);
+  assert(engine.get_packet_ptr(b, 0) == f.tx_pool.data());
+  bool rejected = false;
+  std::thread wrong_owner([&] { rejected = !engine.get_packet_ptr(b, 0); });
+  wrong_owner.join();
+  assert(rejected);
+  engine.free_tx_burst(b);
+  assert(!engine.get_packet_ptr(b, 0));
+  engine.free_tx_burst(b);
+  other.free_tx_burst(alien);
+  engine.shutdown();
+  assert(!engine.get_packet_ptr(b, 0));
+  assert(engine.set_config_and_initialize(config()));
+  auto* fresh = tx_burst(engine);
+  assert(engine.get_packet_ptr(fresh, 0) == f.tx_pool.data());
+  engine.free_tx_burst(fresh);
+}
 void tx_ownership_and_headers() {
   Fixture f;
   TestEngine engine(f);
@@ -720,6 +752,7 @@ int main() {
   validation();
   rx_ownership();
   empty_poll_reuse();
+  metadata_address_validation();
   tx_ownership_and_headers();
   partial_failure();
   indirect_rx(false);
