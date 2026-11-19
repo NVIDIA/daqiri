@@ -209,6 +209,20 @@ struct RawUdpEndpointConfig {
   uint32_t mtu_ = 1514;  // Maximum L2 frame bytes, excluding Ethernet FCS.
 };
 
+/** Application bytes to prepend to the gathered UDP payload. */
+struct RawUdpTxHeaderTemplate {
+  std::array<uint8_t, 32> bytes{};
+  size_t length = 0;
+};
+
+/** Replace a field in the application header with one wire-format value per packet. */
+struct RawUdpTxHeaderPatch {
+  size_t offset = 0;
+  size_t width = 0;
+  const void* values = nullptr;
+  size_t values_size = 0;
+};
+
 enum class MemoryKind { HOST, HOST_PINNED, HUGE, DEVICE, INVALID, NULL_MR };
 
 struct ExternalMemoryRegion {

@@ -36,12 +36,14 @@
 
 namespace {
 
+constexpr size_t kAppHeaderSize = 8;
+
 struct NamedEndpointTx {
   daqiri::bench::RawBenchTxConfig tx;
   daqiri::EndpointId endpoint_id = daqiri::INVALID_ENDPOINT_ID;
 };
 
-bool add_named_endpoint(const daqiri::bench::RawBenchTxConfig& tx, size_t index,
+bool add_named_endpoint(const daqiri::bench::RawBenchTxConfig& tx, size_t index, bool use_template,
                         daqiri::EndpointId* endpoint_id) {
   const auto src_ports = daqiri::bench::parse_udp_ports(tx.udp_src_port);
   const auto dst_ports = daqiri::bench::parse_udp_ports(tx.udp_dst_port);
@@ -60,7 +62,8 @@ bool add_named_endpoint(const daqiri::bench::RawBenchTxConfig& tx, size_t index,
   endpoint.dst_port_ = dst_ports.front();
   // Named-endpoint MTU is the complete L2 frame size. The TX packet buffers
   // below still contain only payload bytes.
-  endpoint.mtu_ = static_cast<uint32_t>(sizeof(daqiri::UDPIPV4Pkt)) + tx.payload_size;
+  endpoint.mtu_ =
+      sizeof(daqiri::UDPIPV4Pkt) + tx.payload_size + (use_template ? kAppHeaderSize : 0);
 
   const auto status = daqiri::add_endpoint(endpoint, endpoint_id);
   if (status != daqiri::Status::SUCCESS) {
@@ -81,7 +84,7 @@ bool add_named_endpoint(const daqiri::bench::RawBenchTxConfig& tx, size_t index,
 }
 
 void tx_worker(const NamedEndpointTx& endpoint, daqiri::bench::TokenBucketPacer& pacer,
-               std::atomic<bool>& stop) {
+               std::atomic<bool>& stop, bool use_template) {
   const auto& cfg = endpoint.tx;
   if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, "named_endpoint_tx")) {
     stop.store(true);
@@ -99,14 +102,24 @@ void tx_worker(const NamedEndpointTx& endpoint, daqiri::bench::TokenBucketPacer&
   for (size_t i = 0; i < payload_template.size(); ++i) {
     payload_template[i] = static_cast<uint8_t>(i & 0xff);
   }
+  daqiri::RawUdpTxHeaderTemplate app_header{{0, 0, 0, 0, 'D', 'A', 'Q', 'I'}, kAppHeaderSize};
+  std::vector<uint32_t> sequences;
+  std::vector<daqiri::RawUdpTxHeaderPatch> patches;
+  if (use_template) {
+    sequences.resize(cfg.batch_size);
+    for (size_t i = 0; i < sequences.size(); ++i) sequences[i] = htonl(static_cast<uint32_t>(i));
+    patches.push_back({0, sizeof(uint32_t), sequences.data(), sequences.size() * sizeof(uint32_t)});
+  }
 
   std::unordered_set<void*> initialized_tx_buffers;
   daqiri::bench::RawBenchQueueStats stats;
-  const uint64_t wire_packet_size = sizeof(daqiri::UDPIPV4Pkt) + cfg.payload_size;
+  const uint64_t wire_packet_size =
+      sizeof(daqiri::UDPIPV4Pkt) + cfg.payload_size + (use_template ? kAppHeaderSize : 0);
   const auto t0 = std::chrono::steady_clock::now();
 
   while (!stop.load()) {
     auto* burst = daqiri::create_tx_burst_params();
+    if (burst == nullptr) continue;
     daqiri::set_header(burst, static_cast<uint16_t>(port_id), static_cast<uint16_t>(cfg.queue_id),
                        cfg.batch_size, 1);
 
@@ -126,7 +139,7 @@ void tx_worker(const NamedEndpointTx& endpoint, daqiri::bench::TokenBucketPacer&
       void* payload = daqiri::get_segment_packet_ptr(burst, 0, packet);
       if (initialized_tx_buffers.insert(payload).second) {
         std::vector<uint8_t> initialized_payload = payload_template;
-        if (initialized_payload.size() >= sizeof(uint32_t)) {
+        if (!use_template && initialized_payload.size() >= sizeof(uint32_t)) {
           const uint32_t sequence = htonl(static_cast<uint32_t>(packet));
           std::memcpy(initialized_payload.data(), &sequence, sizeof(sequence));
         }
@@ -152,8 +165,10 @@ void tx_worker(const NamedEndpointTx& endpoint, daqiri::bench::TokenBucketPacer&
 
     // Queue selection is per submission; the named endpoint contains only the
     // interface and cached destination/header fields.
-    const auto status =
-        daqiri::send_tx_burst(endpoint.endpoint_id, static_cast<uint16_t>(cfg.queue_id), burst);
+    const auto queue_id = static_cast<uint16_t>(cfg.queue_id);
+    const auto status = use_template ? daqiri::send_tx_burst(endpoint.endpoint_id, queue_id, burst,
+                                                             app_header, patches)
+                                     : daqiri::send_tx_burst(endpoint.endpoint_id, queue_id, burst);
     if (status == daqiri::Status::SUCCESS) {
       stats.packets += static_cast<uint64_t>(num_pkts);
       const uint64_t burst_bytes = static_cast<uint64_t>(num_pkts) * wire_packet_size;
@@ -178,13 +193,16 @@ void tx_worker(const NamedEndpointTx& endpoint, daqiri::bench::TokenBucketPacer&
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0]
-              << " <config.yaml> [--seconds N] [--target-gbps G] "
+              << " <config.yaml> [--seconds N] [--target-gbps G] [--app-header-template] "
                  "[--workload none|fft|gemm|gemm_fp16] [--workload-gemm-dim N] "
                  "[--workload-fft-len N] [--workload-sync-interval N]\n";
     return 1;
   }
 
   const int run_seconds = daqiri::bench::parse_run_seconds(argc, argv);
+  const bool use_template = std::find_if(argv + 2, argv + argc, [](const char* arg) {
+                              return std::strcmp(arg, "--app-header-template") == 0;
+                            }) != argv + argc;
   const double target_gbps = daqiri::bench::parse_target_gbps(argc, argv);
   const auto workload = daqiri::bench::parse_workload(argc, argv);
   const int workload_gemm_dim = daqiri::bench::parse_workload_gemm_dim(argc, argv);
@@ -216,7 +234,7 @@ int main(int argc, char** argv) {
   for (size_t index = 0; index < tx_configs.size(); ++index) {
     NamedEndpointTx endpoint;
     endpoint.tx = tx_configs[index];
-    if (!add_named_endpoint(endpoint.tx, index, &endpoint.endpoint_id)) {
+    if (!add_named_endpoint(endpoint.tx, index, use_template, &endpoint.endpoint_id)) {
       for (const auto& added : named_endpoints) daqiri::delete_endpoint(added.endpoint_id);
       daqiri::shutdown();
       return 1;
@@ -231,7 +249,7 @@ int main(int argc, char** argv) {
 
   daqiri::bench::ReorderGeometry geometry;
   geometry.payload_segment = 0;
-  geometry.payload_byte_offset = sizeof(daqiri::UDPIPV4Pkt);
+  geometry.payload_byte_offset = sizeof(daqiri::UDPIPV4Pkt) + (use_template ? kAppHeaderSize : 0);
   geometry.seq_bit_offset = static_cast<uint16_t>(sizeof(daqiri::UDPIPV4Pkt) * 8);
   geometry.seq_bit_width = 32;
   geometry.out_payload_len = tx_configs.front().payload_size;
@@ -244,7 +262,8 @@ int main(int argc, char** argv) {
   }
   tx_threads.reserve(named_endpoints.size());
   for (const auto& endpoint : named_endpoints) {
-    tx_threads.emplace_back(tx_worker, std::cref(endpoint), std::ref(tx_pacer), std::ref(stop));
+    tx_threads.emplace_back(tx_worker, std::cref(endpoint), std::ref(tx_pacer), std::ref(stop),
+                            use_template);
   }
 
   daqiri::bench::wait_for_stop(run_seconds, stop);

@@ -398,6 +398,9 @@ static inline bool blueflame_copy_wqe(void* dst, const void* src, uint32_t wqebb
 
 static constexpr uint32_t MLX5_RAW_ETH_INLINE_HEADER = 18;
 static constexpr uint32_t MLX5_CPU_INLINE_MAX_FRAME = 128;
+static constexpr uint32_t MAX_TX_APP_HEADER_BYTES = RawUdpTxHeaderTemplate{}.bytes.size();
+static constexpr uint32_t ENDPOINT_HEADER_OFFSET =
+    sizeof(mlx5_wqe_ctrl_seg) + offsetof(mlx5_wqe_eth_seg, inline_hdr_start);
 
 static inline uint32_t cpu_inline_wqe_ds(uint32_t frame_len) {
   // ctrl(1 DS) + full eth segment(2 DS) + inline segment header/payload.
@@ -409,14 +412,20 @@ static inline uint32_t cpu_inline_wqe_wqebbs(uint32_t frame_len) {
   return (cpu_inline_wqe_ds(frame_len) * 16u + MLX5_SEND_WQE_BB - 1u) / MLX5_SEND_WQE_BB;
 }
 
-// Ordinary SEND: ctrl + minimal Ethernet segment + one data segment per MR.
-// Endpoint SEND: ctrl + inline Ethernet/IPv4/UDP header (80 bytes total) + data segments.
-static constexpr uint8_t gather_wqe_ds(int num_segs, bool endpoint = false) {
-  return static_cast<uint8_t>((endpoint ? 5 : 2) + num_segs);
+static constexpr uint8_t gather_wqe_ds(int num_segs) {
+  return static_cast<uint8_t>(2 + num_segs);
 }
 
-static constexpr uint32_t gather_wqe_wqebbs(int num_segs, bool endpoint = false) {
-  return (gather_wqe_ds(num_segs, endpoint) * 16u + MLX5_SEND_WQE_BB - 1u) / MLX5_SEND_WQE_BB;
+static constexpr uint32_t wqebbs_for_ds(uint8_t ds) {
+  return (ds * 16u + MLX5_SEND_WQE_BB - 1u) / MLX5_SEND_WQE_BB;
+}
+
+static constexpr uint32_t gather_wqe_wqebbs(int num_segs) {
+  return wqebbs_for_ds(gather_wqe_ds(num_segs));
+}
+
+static constexpr uint8_t endpoint_wqe_ds(int num_segs, uint32_t app_bytes = 0) {
+  return (ENDPOINT_HEADER_OFFSET + sizeof(UDPIPV4Pkt) + app_bytes + 15u) / 16u + num_segs;
 }
 
 static uint32_t direct_tx_reserved_wqebbs(const IbvTxQueue& q) {
@@ -424,7 +433,9 @@ static uint32_t direct_tx_reserved_wqebbs(const IbvTxQueue& q) {
   // inline frame or the largest gathered SEND preceded by an optional WAIT.
   const uint32_t inline_blocks =
       q.cpu_inline_enabled ? cpu_inline_wqe_wqebbs(q.max_inline_data) : 0;
-  return std::max(inline_blocks, gather_wqe_wqebbs(q.num_segs, true) + 1);
+  const uint32_t endpoint_blocks =
+      wqebbs_for_ds(endpoint_wqe_ds(q.num_segs, q.max_app_header_bytes));
+  return std::max(inline_blocks, endpoint_blocks + 1);
 }
 
 static inline void copy_wqe_to_cyclic_sq(uint8_t* sq_buf, uint32_t wqe_cnt, uint32_t stride,
@@ -765,17 +776,40 @@ static inline uint32_t rdr_output_payload_len(const ReorderConfig& c, uint32_t i
 // ---------------------------------------------------------------------------
 namespace {
 struct EndpointInlineTxMetadata {
-  UDPIPV4Pkt header;
+  struct Field {
+    uint8_t offset;
+    uint8_t width;
+  };
+
+  UDPIPV4Pkt header{};
+  std::array<uint8_t, MAX_TX_APP_HEADER_BYTES> app_header{};
+  uint8_t app_length = 0;
+  uint8_t patch_count = 0;
+  std::array<Field, MAX_TX_APP_HEADER_BYTES> fields;
+  std::unique_ptr<uint8_t[]> patch_values;
 };
 
 static_assert(sizeof(EndpointInlineTxMetadata) <= sizeof(BurstHeader::custom_burst_data));
+static_assert(offsetof(BurstHeader, custom_burst_data) % alignof(EndpointInlineTxMetadata) == 0);
 
 EndpointInlineTxMetadata* endpoint_inline_metadata(BurstParams* burst) {
-  return reinterpret_cast<EndpointInlineTxMetadata*>(burst->hdr.custom_burst_data);
+  return std::launder(reinterpret_cast<EndpointInlineTxMetadata*>(burst->hdr.custom_burst_data));
 }
 
 const EndpointInlineTxMetadata* endpoint_inline_metadata(const BurstParams* burst) {
-  return reinterpret_cast<const EndpointInlineTxMetadata*>(burst->hdr.custom_burst_data);
+  return std::launder(
+      reinterpret_cast<const EndpointInlineTxMetadata*>(burst->hdr.custom_burst_data));
+}
+
+void clear_endpoint_inline_metadata(BurstParams* burst) {
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_ENDPOINT_INLINE_FLAG) != 0) {
+    endpoint_inline_metadata(burst)->~EndpointInlineTxMetadata();
+    burst->hdr.hdr.burst_flags &= ~IBV_TX_ENDPOINT_INLINE_FLAG;
+  }
+}
+
+uint32_t endpoint_inline_header_length(const BurstParams* burst) {
+  return sizeof(UDPIPV4Pkt) + endpoint_inline_metadata(burst)->app_length;
 }
 
 struct IbvBurstLayout {
@@ -7297,20 +7331,20 @@ void IbverbsEngine::destroy_tx_queue(IbvTxQueue& q) {
       release_shared_burst(burst);
     else
       q.alloc_head -= static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
-    tx_meta_pool_->put(burst);
+    recycle_tx_metadata(burst);
   }
   if (q.worker_pending != nullptr) {
     if (q.shared_tx)
       release_shared_burst(q.worker_pending);
     else
       q.alloc_head -= static_cast<uint64_t>(q.worker_pending->hdr.hdr.num_pkts);
-    tx_meta_pool_->put(q.worker_pending);
+    recycle_tx_metadata(q.worker_pending);
     q.worker_pending = nullptr;
     q.worker_pending_wqebbs = 0;
   }
   if (q.direct_pending != nullptr) {
     q.alloc_head--;
-    tx_meta_pool_->put(q.direct_pending);
+    recycle_tx_metadata(q.direct_pending);
     q.direct_pending = nullptr;
   }
   if (q.qp != nullptr) {
@@ -7354,7 +7388,7 @@ void IbverbsEngine::drain_tx_queue(IbvTxQueue& q) {
         break;
       }
       post_tx_burst(q, q.worker_pending);
-      tx_meta_pool_->put(q.worker_pending);
+      recycle_tx_metadata(q.worker_pending);
       q.worker_pending = nullptr;
       q.worker_pending_wqebbs = 0;
       poll_tx_completions(q);
@@ -8076,7 +8110,7 @@ void IbverbsEngine::shutdown() {
         release_shared_burst(q->worker_pending);
       else
         q->alloc_head -= static_cast<uint64_t>(q->worker_pending->hdr.hdr.num_pkts);
-      tx_meta_pool_->put(q->worker_pending);
+      recycle_tx_metadata(q->worker_pending);
       q->worker_pending = nullptr;
       q->worker_pending_wqebbs = 0;
     }
@@ -8085,7 +8119,7 @@ void IbverbsEngine::shutdown() {
           "Direct TX port {} queue {} shut down with one unsubmitted packet; reclaiming it",
           q->port_id, q->queue_id);
       q->alloc_head--;
-      tx_meta_pool_->put(q->direct_pending);
+      recycle_tx_metadata(q->direct_pending);
       q->direct_pending = nullptr;
     }
     if (q->shared_tx) {
@@ -8093,7 +8127,7 @@ void IbverbsEngine::shutdown() {
       while (q->send_ring != nullptr && q->send_ring->dequeue(&raw)) {
         auto* burst = static_cast<BurstParams*>(raw);
         release_shared_burst(burst);
-        tx_meta_pool_->put(burst);
+        recycle_tx_metadata(burst);
       }
     }
     if (q->qp) {
@@ -8175,7 +8209,10 @@ void IbverbsEngine::shutdown() {
     rx_meta_pool_ = nullptr;
   }
   if (tx_meta_pool_) {
-    for (auto* burst : tx_metadata_objects_) burst->~BurstParams();
+    for (auto* burst : tx_metadata_objects_) {
+      clear_endpoint_inline_metadata(burst);
+      burst->~BurstParams();
+    }
     tx_metadata_objects_.clear();
     daqiri::ObjectPool::free(tx_meta_pool_);
     tx_meta_pool_ = nullptr;
@@ -8528,22 +8565,36 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
   // library-wide maximum makes mlx5 reserve larger WQEs even for a normal
   // single-region queue and can needlessly exceed the device's SQ limit.
   attr.cap.max_send_sge = static_cast<uint32_t>(q.num_segs);
+  constexpr uint32_t inline_overhead =
+      sizeof(mlx5_wqe_ctrl_seg) + sizeof(mlx5_wqe_eth_seg) + sizeof(mlx5_wqe_inl_data_seg);
   attr.cap.max_inline_data = sizeof(UDPIPV4Pkt);
   if (q.num_segs > 1) {
     // mlx5 sizes its SQ descriptors for max(inline, gather), not their sum.
     // Reserve enough descriptor space for an endpoint's inline header AND all
     // gathered regions, including the three-WQEBB four-region endpoint SEND.
-    const uint32_t overhead = sizeof(struct mlx5_wqe_ctrl_seg) + sizeof(struct mlx5_wqe_eth_seg) +
-                              sizeof(struct mlx5_wqe_inl_data_seg);
     attr.cap.max_inline_data =
-        std::max<uint32_t>(sizeof(UDPIPV4Pkt), gather_wqe_ds(q.num_segs, true) * 16u - overhead);
+        std::max<uint32_t>(sizeof(UDPIPV4Pkt), endpoint_wqe_ds(q.num_segs) * 16u - inline_overhead);
   }
   if (q.cpu_inline_enabled) {
     attr.cap.max_inline_data = std::max<uint32_t>(MLX5_CPU_INLINE_MAX_FRAME, sizeof(UDPIPV4Pkt));
   }
   attr.cap.max_recv_wr = 1;
   attr.cap.max_recv_sge = 1;
+
+  // mlx5 sizes SEND descriptors for the larger of inline data and SGEs.
+  // Increase the inline request only when the combined SEND needs more blocks.
+  const uint32_t legacy_blocks =
+      (attr.cap.max_inline_data + inline_overhead + MLX5_SEND_WQE_BB - 1) / MLX5_SEND_WQE_BB;
+  const uint8_t template_ds = endpoint_wqe_ds(q.num_segs, MAX_TX_APP_HEADER_BYTES);
+  const auto legacy_attr = attr;
+  if (wqebbs_for_ds(template_ds) > legacy_blocks) {
+    attr.cap.max_inline_data = template_ds * 16u - inline_overhead;
+  }
   q.qp = verbs_->create_qp(q.pd, &attr);
+  if (q.qp == nullptr && wqebbs_for_ds(template_ds) > legacy_blocks) {
+    attr = legacy_attr;
+    q.qp = verbs_->create_qp(q.pd, &attr);
+  }
   if (q.qp == nullptr) {
     DAQIRI_LOG_CRITICAL(
         "TX ibv_create_qp (RAW_PACKET) failed: {} ({} slots, {} send WRs, {} send SGEs; "
@@ -8557,6 +8608,13 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
     return Status::NOT_SUPPORTED;
   }
   q.max_inline_data = attr.cap.max_inline_data;
+  const uint32_t reserved_bytes =
+      ((q.max_inline_data + inline_overhead + MLX5_SEND_WQE_BB - 1) / MLX5_SEND_WQE_BB) *
+      MLX5_SEND_WQE_BB;
+  const uint32_t base_bytes = ENDPOINT_HEADER_OFFSET + sizeof(UDPIPV4Pkt) + q.num_segs * 16u;
+  q.max_app_header_bytes = reserved_bytes >= base_bytes
+                               ? std::min(MAX_TX_APP_HEADER_BYTES, reserved_bytes - base_bytes)
+                               : 0;
   // RESET -> INIT -> RTR -> RTS.
   struct ibv_qp_attr m {};
   m.qp_state = IBV_QPS_INIT;
@@ -8853,7 +8911,8 @@ uint64_t IbverbsEngine::tx_burst_wqebbs(const IbvTxQueue& q, const BurstParams* 
   const uint64_t packets = burst->hdr.hdr.num_pkts;
   const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
   if ((burst->hdr.hdr.burst_flags & IBV_TX_ENDPOINT_INLINE_FLAG) != 0) {
-    uint64_t wqebbs = packets * gather_wqe_wqebbs(q.num_segs, true);
+    const uint32_t app_length = endpoint_inline_metadata(burst)->app_length;
+    uint64_t wqebbs = packets * wqebbs_for_ds(endpoint_wqe_ds(q.num_segs, app_length));
     if (scheduled) {
       const uint64_t* txtime = burst_ts_arr(burst);
       for (uint64_t i = 0; i < packets; ++i) {
@@ -9001,7 +9060,7 @@ void IbverbsEngine::tx_worker(std::vector<IbvTxQueue*> group) {
           break;
         }
         post_tx_burst(*q, item.burst);
-        tx_meta_pool_->put(item.burst);
+        recycle_tx_metadata(item.burst);
         item = {};
         poll_tx_completions(*q);
       }
@@ -9023,7 +9082,9 @@ BurstParams* IbverbsEngine::create_tx_burst_params() {
   }
   burst->hdr.hdr.num_pkts = 0;
   burst->hdr.hdr.num_segs = 1;
+  burst->hdr.hdr.max_pkt = 0;
   burst->hdr.hdr.burst_flags = IBV_TX_BURST_FLAG;
+  burst->hdr.extra_burst_data = nullptr;
   init_burst_segment_arrays(burst);
   return burst;
 }
@@ -9085,6 +9146,8 @@ Status IbverbsEngine::get_tx_packet_burst(BurstParams* burst) {
         burst->pkt_lens[seg][i] = 0;
       }
     }
+    burst->hdr.hdr.max_pkt = n;
+    burst->hdr.extra_burst_data = q.get();
     return Status::SUCCESS;
   }
   if (q->poll_mode == QueuePollMode::DIRECT) {
@@ -9122,6 +9185,8 @@ Status IbverbsEngine::get_tx_packet_burst(BurstParams* burst) {
     }
   }
   q->alloc_head += n;
+  burst->hdr.hdr.max_pkt = n;
+  burst->hdr.extra_burst_data = q.get();
   if (q->poll_mode == QueuePollMode::DIRECT) {
     q->direct_pending = burst;
   }
@@ -9150,8 +9215,9 @@ Status IbverbsEngine::validate_shared_tx_burst(const IbvTxQueue& q,
     return Status::INVALID_PARAMETER;
   const uint64_t max_frame = ETH_HLEN + UINT16_MAX;
   for (size_t i = 0; i < burst->hdr.hdr.num_pkts; ++i) {
-    uint64_t bytes =
-        (burst->hdr.hdr.burst_flags & IBV_TX_ENDPOINT_INLINE_FLAG) ? sizeof(UDPIPV4Pkt) : 0;
+    uint64_t bytes = (burst->hdr.hdr.burst_flags & IBV_TX_ENDPOINT_INLINE_FLAG)
+                         ? endpoint_inline_header_length(burst)
+                         : 0;
     for (int seg = 0; seg < q.num_segs; ++seg) {
       const auto* buffer = burst_shared_arr(burst, seg)[i];
       if (buffer == nullptr || buffer->pool != q.shared_tx->pools[seg].get() ||
@@ -9195,6 +9261,8 @@ Status IbverbsEngine::clone_shared_tx_burst(IbvTxQueue& q, const BurstParams* so
   out->hdr.hdr.port_id = q.port_id;
   out->hdr.hdr.q_id = q.queue_id;
   out->hdr.hdr.num_pkts = n;
+  out->hdr.hdr.max_pkt = n;
+  out->hdr.extra_burst_data = &q;
   out->hdr.hdr.num_segs = q.num_segs;
   out->hdr.hdr.burst_flags = IBV_TX_BURST_FLAG | IBV_TX_SHARED_FLAG | IBV_TX_SHARED_OWNED_FLAG;
   out->custom_pkt_data.reset();
@@ -9229,7 +9297,7 @@ Status IbverbsEngine::clone_shared_tx_burst(IbvTxQueue& q, const BurstParams* so
   }
   if (status != Status::SUCCESS) {
     release_shared_burst(out);
-    tx_meta_pool_->put(out);
+    recycle_tx_metadata(out);
     return status;
   }
   *clone = out;
@@ -9453,27 +9521,38 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst, uint16
   q.bf_offset ^= q.dv_qp.bf.size;
 }
 
-// Build endpoint-aware WQEs with an inline Ethernet/IPv4/UDP header followed
-// by all gathered payload segments. The 42-byte cached template is copied into
-// the SQ, not into the host/GPU payload buffers.
+// Build endpoint-aware WQEs with the inline network and application headers
+// followed by all gathered payload segments.
 void IbverbsEngine::post_endpoint_inline_burst(IbvTxQueue& q, BurstParams* burst) {
-  const uint32_t wqebbs = gather_wqe_wqebbs(q.num_segs, true);
-  const uint8_t ds = gather_wqe_ds(q.num_segs, true);
-  constexpr size_t PAYLOAD_DSEG_OFFSET = 80;
-  constexpr size_t WQE_BYTES = gather_wqe_wqebbs(MAX_NUM_SEGS, true) * MLX5_SEND_WQE_BB;
-  static_assert(16 + offsetof(struct mlx5_wqe_eth_seg, inline_hdr_start) + sizeof(UDPIPV4Pkt) <=
-                PAYLOAD_DSEG_OFFSET);
-  static_assert(PAYLOAD_DSEG_OFFSET + MAX_NUM_SEGS * sizeof(struct mlx5_wqe_data_seg) <= WQE_BYTES);
+  constexpr size_t WQE_BYTES =
+      wqebbs_for_ds(endpoint_wqe_ds(MAX_NUM_SEGS, MAX_TX_APP_HEADER_BYTES)) * MLX5_SEND_WQE_BB;
+  constexpr size_t IP_LENGTH_OFFSET = offsetof(UDPIPV4Pkt, ip) + offsetof(iphdr, tot_len);
+  constexpr size_t UDP_LENGTH_OFFSET = offsetof(UDPIPV4Pkt, udp) + offsetof(udphdr, len);
   static constexpr int SIGNAL_EVERY = 32;
 
   const int packets = static_cast<int>(burst->hdr.hdr.num_pkts);
   const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
   const uint64_t* txtime = scheduled ? burst_ts_arr(burst) : nullptr;
   const EndpointInlineTxMetadata* metadata = endpoint_inline_metadata(burst);
+  const uint8_t ds = endpoint_wqe_ds(q.num_segs, metadata->app_length);
+  const uint32_t wqebbs = wqebbs_for_ds(ds);
   uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
   const uint32_t wqe_cnt = q.dv_qp.sq.wqe_cnt;
   const uint32_t stride = q.dv_qp.sq.stride;
   void* last_ctrl = nullptr;
+
+  alignas(16) std::array<uint8_t, WQE_BYTES> wqe{};
+  auto* ctrl = reinterpret_cast<mlx5_wqe_ctrl_seg*>(wqe.data());
+  ctrl->qpn_ds = htobe32((q.sqn << 8) | ds);
+  auto* eth = reinterpret_cast<mlx5_wqe_eth_seg*>(wqe.data() + sizeof(*ctrl));
+  eth->cs_flags = MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+  eth->inline_hdr_sz = htobe16(endpoint_inline_header_length(burst));
+
+  uint8_t* header = wqe.data() + ENDPOINT_HEADER_OFFSET;
+  memcpy(header, &metadata->header, sizeof(metadata->header));
+  uint8_t* app_header = header + sizeof(metadata->header);
+  memcpy(app_header, metadata->app_header.data(), metadata->app_length);
+  auto* dseg = reinterpret_cast<mlx5_wqe_data_seg*>(wqe.data() + (ds - q.num_segs) * 16u);
 
   for (int packet = 0; packet < packets; ++packet) {
     if (scheduled && txtime[packet] != 0) {
@@ -9481,38 +9560,31 @@ void IbverbsEngine::post_endpoint_inline_burst(IbvTxQueue& q, BurstParams* burst
     }
 
     const uint32_t first_idx = q.sq_pi & (wqe_cnt - 1);
-    alignas(16) std::array<uint8_t, WQE_BYTES> wqe{};
-    auto* ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(wqe.data());
     const auto timestamp_id = packet_tx_timestamp_id(burst, packet);
     const bool signaled = timestamp_id != INVALID_TX_TIMESTAMP_ID ||
                           ((packet % SIGNAL_EVERY) == (SIGNAL_EVERY - 1)) ||
                           (packet == packets - 1);
     ctrl->opmod_idx_opcode = htobe32(((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_SEND);
-    ctrl->qpn_ds = htobe32((q.sqn << 8) | ds);
     ctrl->fm_ce_se = tx_completion_mode(signaled);
 
-    auto* eth = reinterpret_cast<struct mlx5_wqe_eth_seg*>(wqe.data() + 16);
-    eth->cs_flags = MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
-    eth->inline_hdr_sz = htobe16(sizeof(UDPIPV4Pkt));
-    UDPIPV4Pkt header = metadata->header;
-    uint32_t payload_length = 0;
-    for (int s = 0; s < q.num_segs; ++s) {
-      payload_length += burst->pkt_lens[s][packet];
+    const uint8_t* values = metadata->patch_values.get();
+    for (uint8_t i = 0; i < metadata->patch_count; ++i) {
+      const auto& field = metadata->fields[i];
+      memcpy(app_header + field.offset, values + packet * field.width, field.width);
+      values += packets * field.width;
     }
-    header.ip.tot_len = htobe16(
-        static_cast<uint16_t>(sizeof(struct iphdr) + sizeof(struct udphdr) + payload_length));
-    header.ip.check = 0;
-    header.udp.len = htobe16(static_cast<uint16_t>(sizeof(struct udphdr) + payload_length));
-    header.udp.check = 0;
-    memcpy(wqe.data() + 16 + offsetof(struct mlx5_wqe_eth_seg, inline_hdr_start), &header,
-           sizeof(header));
-
-    auto* dseg = reinterpret_cast<struct mlx5_wqe_data_seg*>(wqe.data() + PAYLOAD_DSEG_OFFSET);
+    uint32_t udp_data_length = metadata->app_length;
     for (int s = 0; s < q.num_segs; ++s) {
-      dseg[s].byte_count = htobe32(burst->pkt_lens[s][packet]);
+      const uint32_t segment_length = burst->pkt_lens[s][packet];
+      udp_data_length += segment_length;
+      dseg[s].byte_count = htobe32(segment_length);
       dseg[s].lkey = htobe32(q.regions[s].lkey);
       dseg[s].addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[s][packet]));
     }
+    const uint16_t ip_length = htobe16(sizeof(iphdr) + sizeof(udphdr) + udp_data_length);
+    const uint16_t udp_length = htobe16(sizeof(udphdr) + udp_data_length);
+    memcpy(header + IP_LENGTH_OFFSET, &ip_length, sizeof(ip_length));
+    memcpy(header + UDP_LENGTH_OFFSET, &udp_length, sizeof(udp_length));
 
     uint8_t* first = sq_buf + static_cast<size_t>(first_idx) * stride;
     copy_wqe_to_cyclic_sq(sq_buf, wqe_cnt, stride, first_idx, wqe.data(), wqebbs);
@@ -9701,14 +9773,38 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
 
 Status IbverbsEngine::prepare_endpoint_tx_burst(const IbvTxQueue& q,
                                                 const EndpointFastPath& endpoint,
-                                                BurstParams* burst) {
+                                                BurstParams* burst,
+                                                const RawUdpTxHeaderTemplate& header,
+                                                const std::vector<RawUdpTxHeaderPatch>& patches) {
+  const size_t packets = burst->hdr.hdr.num_pkts;
+  const size_t wire_header_length = sizeof(UDPIPV4Pkt) + header.length;
   if (burst->hdr.hdr.port_id != endpoint.port_id || burst->hdr.hdr.q_id != q.queue_id ||
       burst->hdr.hdr.num_segs != q.num_segs || q.num_segs < 1 || q.num_segs > MAX_NUM_SEGS ||
-      endpoint.mtu < sizeof(UDPIPV4Pkt)) {
+      packets == 0 || (q.poll_mode == QueuePollMode::DIRECT && packets != 1) ||
+      header.length > header.bytes.size() || wire_header_length > endpoint.mtu ||
+      (burst->hdr.hdr.burst_flags & IBV_TX_ENDPOINT_INLINE_FLAG) != 0) {
     return Status::INVALID_PARAMETER;
   }
 
-  const size_t packets = burst->hdr.hdr.num_pkts;
+  uint64_t patched_bytes = 0;
+  size_t values_size = 0;
+  for (const auto& patch : patches) {
+    if (patch.width == 0 || patch.offset >= header.length ||
+        patch.width > header.length - patch.offset || patch.values == nullptr ||
+        patch.values_size % patch.width != 0 || patch.values_size / patch.width != packets) {
+      return Status::INVALID_PARAMETER;
+    }
+    const uint64_t mask = ((uint64_t{1} << patch.width) - 1) << patch.offset;
+    if ((patched_bytes & mask) != 0) return Status::INVALID_PARAMETER;
+    patched_bytes |= mask;
+    values_size += patch.values_size;
+  }
+  if (header.length > q.max_app_header_bytes) return Status::NOT_SUPPORTED;
+
+  for (int s = 0; s < q.num_segs; ++s) {
+    if (burst->pkts[s] == nullptr || burst->pkt_lens[s] == nullptr)
+      return Status::INVALID_PARAMETER;
+  }
   for (size_t packet = 0; packet < packets; ++packet) {
     uint64_t payload_length = 0;
     for (int s = 0; s < q.num_segs; ++s) {
@@ -9718,14 +9814,36 @@ Status IbverbsEngine::prepare_endpoint_tx_burst(const IbvTxQueue& q,
       }
       payload_length += burst->pkt_lens[s][packet];
     }
-    if (payload_length > endpoint.mtu - sizeof(UDPIPV4Pkt) ||
-        payload_length > UINT16_MAX - sizeof(struct iphdr) - sizeof(struct udphdr)) {
+    const uint64_t frame_length = payload_length + wire_header_length;
+    if (frame_length > endpoint.mtu || frame_length - sizeof(ethhdr) > UINT16_MAX) {
       return Status::INVALID_PARAMETER;
     }
   }
 
-  EndpointInlineTxMetadata* metadata = endpoint_inline_metadata(burst);
+  std::unique_ptr<uint8_t[]> values;
+  if (q.poll_mode != QueuePollMode::DIRECT && !patches.empty()) {
+    values.reset(new (std::nothrow) uint8_t[values_size]);
+    if (!values) return Status::NO_FREE_BURST_BUFFERS;
+  }
+  auto* metadata = new (burst->hdr.custom_burst_data) EndpointInlineTxMetadata;
   metadata->header = endpoint.header_template;
+  metadata->header.ip.check = 0;
+  metadata->header.udp.check = 0;
+  metadata->app_length = static_cast<uint8_t>(header.length);
+  memcpy(metadata->app_header.data(), header.bytes.data(), header.length);
+
+  uint8_t* out = values.get();
+  for (const auto& patch : patches) {
+    if (q.poll_mode == QueuePollMode::DIRECT) {
+      memcpy(metadata->app_header.data() + patch.offset, patch.values, patch.width);
+    } else {
+      metadata->fields[metadata->patch_count++] = {static_cast<uint8_t>(patch.offset),
+                                                   static_cast<uint8_t>(patch.width)};
+      memcpy(out, patch.values, patch.values_size);
+      out += patch.values_size;
+    }
+  }
+  metadata->patch_values = std::move(values);
   burst->hdr.hdr.burst_flags |= IBV_TX_ENDPOINT_INLINE_FLAG;
   return Status::SUCCESS;
 }
@@ -9734,19 +9852,36 @@ Status IbverbsEngine::prepare_endpoint_tx_burst(const IbvTxQueue& q,
 // posting overlaps application fill; direct queues post one packet inline on
 // the owner thread and return only after ringing the doorbell.
 Status IbverbsEngine::send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst) {
+  return send_tx_burst(endpoint_id, queue_id, burst, {}, {});
+}
+
+Status IbverbsEngine::send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst,
+                                    const RawUdpTxHeaderTemplate& header,
+                                    const std::vector<RawUdpTxHeaderPatch>& patches) {
   if (burst == nullptr) return Status::NULL_PTR;
+  const size_t packets = burst->hdr.hdr.num_pkts;
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_BURST_FLAG) == 0 || packets == 0 ||
+      packets != burst->hdr.hdr.max_pkt || packets > max_batch_) {
+    return Status::INVALID_PARAMETER;
+  }
 
   EndpointFastPath endpoint;
   if (!snapshot_endpoint(endpoint_id, &endpoint)) return Status::INVALID_PARAMETER;
 
-  IbvTxQueue* q = find_tx_queue(endpoint.port_id, queue_id);
-  if (q == nullptr) return Status::INVALID_PARAMETER;
-  const Status prepared = prepare_endpoint_tx_burst(*q, endpoint, burst);
+  QueueUse<IbvTxQueue> q(acquire_tx_queue(endpoint.port_id, queue_id));
+  // Validate the queue that allocated the packet slots, even if its ID was reused.
+  if (!q || burst->hdr.extra_burst_data != q.get() || packets > q->num_slots)
+    return Status::INVALID_PARAMETER;
+  const Status prepared = prepare_endpoint_tx_burst(*q, endpoint, burst, header, patches);
   if (prepared != Status::SUCCESS) return prepared;
 
-  const Status status = send_tx_burst(burst);
+  if (tx_burst_wqebbs(*q, burst) > q->sq_capacity_wqebbs) {
+    clear_endpoint_inline_metadata(burst);
+    return Status::INVALID_PARAMETER;
+  }
+  const Status status = submit_tx_burst(*q, burst);
   if (status != Status::SUCCESS && status != Status::NO_SPACE_AVAILABLE) {
-    burst->hdr.hdr.burst_flags &= ~IBV_TX_ENDPOINT_INLINE_FLAG;
+    clear_endpoint_inline_metadata(burst);
   }
   return status;
 }
@@ -9759,76 +9894,85 @@ Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
   if (!q) {
     return Status::INVALID_PARAMETER;
   }
-  if (burst->hdr.hdr.num_segs != q->num_segs) {
+  return submit_tx_burst(*q, burst);
+}
+
+Status IbverbsEngine::submit_tx_burst(IbvTxQueue& q, BurstParams* burst) {
+  if (burst->hdr.hdr.num_segs != q.num_segs) {
     return Status::INVALID_PARAMETER;
   }
   if ((burst->hdr.hdr.burst_flags & IBV_TX_TIMESTAMP_FLAG) != 0) {
     std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
     for (size_t i = 0; i < burst->hdr.hdr.num_pkts; ++i) {
       const auto it = tx_timestamp_requests_.find(burst_tx_timestamp_ids(burst)[i]);
-      if (it != tx_timestamp_requests_.end() && it->second.queue != q.get())
+      if (it != tx_timestamp_requests_.end() && it->second.queue != &q)
         return Status::INVALID_PARAMETER;
     }
   }
   // Shared storage must stay on a queue that validates and retires its references.
-  if ((burst->hdr.hdr.burst_flags & IBV_TX_SHARED_FLAG) != 0 && !q->shared_tx) {
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_SHARED_FLAG) != 0 && !q.shared_tx) {
     return Status::INVALID_PARAMETER;
   }
-  if (q->shared_tx) {
-    if (q->shared_tx->failed.load(std::memory_order_acquire)) return Status::NOT_READY;
-    const Status valid = validate_shared_tx_burst(*q, burst);
+  if (q.shared_tx) {
+    if (q.shared_tx->failed.load(std::memory_order_acquire)) return Status::NOT_READY;
+    const Status valid = validate_shared_tx_burst(q, burst);
     if (valid != Status::SUCCESS) return valid;
     const uint64_t n = burst->hdr.hdr.num_pkts;
-    const uint64_t outstanding = q->alloc_head - q->completed_tail.load(std::memory_order_acquire);
-    if (n > q->num_slots - outstanding) {
+    const uint64_t outstanding = q.alloc_head - q.completed_tail.load(std::memory_order_acquire);
+    if (n > q.num_slots - outstanding) {
       fail_tx_timestamps(burst);
       burst->hdr.hdr.burst_flags &= ~IBV_TX_SHARED_OWNED_FLAG;
       release_shared_burst(burst);
-      tx_meta_pool_->put(burst);
-      ++q->handoff_drop_bursts;
-      q->handoff_drop_pkts += n;
+      recycle_tx_metadata(burst);
+      ++q.handoff_drop_bursts;
+      q.handoff_drop_pkts += n;
       return Status::NO_SPACE_AVAILABLE;
     }
-    q->alloc_head += n;
+    q.alloc_head += n;
     burst->hdr.hdr.burst_flags &= ~IBV_TX_SHARED_OWNED_FLAG;
-    if (!q->send_ring->enqueue(burst)) {
+    if (!q.send_ring->enqueue(burst)) {
       fail_tx_timestamps(burst);
-      q->alloc_head -= n;  // Undo admission only; never a storage allocation index.
+      q.alloc_head -= n;  // Undo admission only; never a storage allocation index.
       release_shared_burst(burst);
-      tx_meta_pool_->put(burst);
-      ++q->handoff_drop_bursts;
-      q->handoff_drop_pkts += n;
+      recycle_tx_metadata(burst);
+      ++q.handoff_drop_bursts;
+      q.handoff_drop_pkts += n;
       return Status::NO_SPACE_AVAILABLE;
     }
     return Status::SUCCESS;
   }
-  if (q->poll_mode == QueuePollMode::DIRECT) {
-    if (!owns_direct_tx_queue(*q)) {
+  if (q.poll_mode == QueuePollMode::DIRECT) {
+    if (!owns_direct_tx_queue(q)) {
       return Status::NOT_READY;
     }
-    if (burst->hdr.hdr.num_pkts != 1 || q->direct_pending != burst) {
+    if (burst->hdr.hdr.num_pkts != 1 || q.direct_pending != burst) {
       DAQIRI_LOG_WARN("Direct TX port {} queue {} requires its one pending single-packet burst",
-                      q->port_id, q->queue_id);
+                      q.port_id, q.queue_id);
       return Status::INVALID_PARAMETER;
     }
-    post_tx_burst(*q, burst);
-    q->direct_pending = nullptr;
-    tx_meta_pool_->put(burst);
+    post_tx_burst(q, burst);
+    q.direct_pending = nullptr;
+    recycle_tx_metadata(burst);
     return Status::SUCCESS;
   }
-  if (!q->send_ring->enqueue(burst)) {
+  if (!q.send_ring->enqueue(burst)) {
     fail_tx_timestamps(burst);
     // Worker is behind: roll back this (most-recent, unposted) allocation and
     // drop the metadata; caller moves on. Safe because get/send are paired on
     // the fill thread, so these are the last slots handed out and the worker
     // never saw them (they were never enqueued to send_ring).
-    q->alloc_head -= static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
-    q->handoff_drop_bursts++;
-    q->handoff_drop_pkts += static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
-    tx_meta_pool_->put(burst);
+    q.alloc_head -= static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
+    q.handoff_drop_bursts++;
+    q.handoff_drop_pkts += static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
+    recycle_tx_metadata(burst);
     return Status::NO_SPACE_AVAILABLE;
   }
   return Status::SUCCESS;
+}
+
+void IbverbsEngine::recycle_tx_metadata(BurstParams* burst) {
+  clear_endpoint_inline_metadata(burst);
+  tx_meta_pool_->put(burst);
 }
 
 void IbverbsEngine::free_tx_burst(BurstParams* burst) {
@@ -9839,7 +9983,7 @@ void IbverbsEngine::free_tx_burst(BurstParams* burst) {
       burst->hdr.hdr.burst_flags &= ~IBV_TX_SHARED_OWNED_FLAG;
     }
     fail_tx_timestamps(burst);
-    tx_meta_pool_->put(burst);
+    recycle_tx_metadata(burst);
   }
 }
 
@@ -9851,7 +9995,7 @@ void IbverbsEngine::free_tx_metadata(BurstParams* burst) {
       burst->hdr.hdr.burst_flags &= ~IBV_TX_SHARED_OWNED_FLAG;
     }
     fail_tx_timestamps(burst);
-    tx_meta_pool_->put(burst);
+    recycle_tx_metadata(burst);
   }
 }
 

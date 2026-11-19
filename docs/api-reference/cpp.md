@@ -684,6 +684,46 @@ Other failures leave ownership with the caller, who must retry or free the burst
 A second direct acquisition before the pending packet is sent or freed
 returns `NOT_READY`; zero- or multi-packet direct requests return `INVALID_PARAMETER`.
 
+### Application header templates (raw ibverbs)
+
+Use a reusable template when every packet needs an application header between
+UDP and the gathered payload. Fill the TX slots with payload bytes and set their
+segment lengths as usual. This example sends a four-byte sequence number followed
+by the fixed bytes `DAQI` in an eight-byte application header.
+
+```cpp
+daqiri::RawUdpTxHeaderTemplate header{{0, 0, 0, 0, 'D', 'A', 'Q', 'I'}, 8};
+std::vector<uint32_t> sequence(daqiri::get_num_packets(burst));
+for (size_t i = 0; i < sequence.size(); ++i) {
+    sequence[i] = htonl(static_cast<uint32_t>(i));
+}
+
+std::vector<daqiri::RawUdpTxHeaderPatch> patches{
+    {0, sizeof(uint32_t), sequence.data(), sequence.size() * sizeof(uint32_t)},
+};
+auto status = daqiri::send_tx_burst(endpoint_id, queue_id, burst, header, patches);
+```
+
+The template supports up to 32 active bytes. Each patch gives an offset from
+the start of the application header, a field width, and a contiguous CPU-readable
+buffer containing one wire-format value of that width per packet. Patches must fit
+within the template and have disjoint byte ranges. Omit the patch list to send
+the template verbatim. You can reuse the template and value buffers as soon as
+the call returns.
+
+DAQIRI inlines both headers in the send WQE and derives IPv4 and UDP lengths
+from the application header and gathered segments. The NIC computes the
+checksums. Size the endpoint MTU for the full Ethernet frame including the
+application header, and ensure the egress link MTU accommodates the resulting
+IP packet. A provider that falls back to legacy send queue sizing can return
+`NOT_SUPPORTED` when the combined header and gather entries exceed its
+descriptor capacity. Other engines also return `NOT_SUPPORTED`.
+
+`SUCCESS` and `NO_SPACE_AVAILABLE` consume the burst. Other statuses leave
+it with the caller. Indirect queues support batches and direct queues accept
+one packet. Run `daqiri_example_named_endpoints` with `--app-header-template`
+to exercise this path.
+
 ### Shared TX segments
 
 Raw ibverbs indirect queues with `buffer_mode: shared` can clone a complete,
@@ -1114,6 +1154,7 @@ workflow sections above show the common call order and ownership rules.
 | `clone_tx_burst(source, mask, &clone)` | Retain selected TX segments and privately copy CPU segments on shared-mode raw ibverbs queues. |
 | `send_tx_burst(burst)` | Enqueue a populated TX burst. |
 | `send_tx_burst(endpoint_id, queue_id, burst)` | Inline cached raw-UDP headers, gather payload pointers, and enqueue an ibverbs burst on the selected queue. |
+| `send_tx_burst(endpoint_id, queue_id, burst, header, patches)` | Send a named-endpoint burst with an inline application header and optional per-packet patches. |
 | `add_endpoint(config, &endpoint_id)` | Add a named raw-UDP endpoint to the active ibverbs engine. |
 | `get_endpoint_id(name, &endpoint_id)` | Resolve an endpoint name outside the TX hot path. |
 | `delete_endpoint(endpoint_id)` | Delete a runtime endpoint. A name overload is also available. |

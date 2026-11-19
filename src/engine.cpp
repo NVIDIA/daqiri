@@ -1720,6 +1720,11 @@ Status Engine::send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstPar
   return Status::NOT_SUPPORTED;
 }
 
+Status Engine::send_tx_burst(EndpointId, uint16_t, BurstParams*, const RawUdpTxHeaderTemplate&,
+                             const std::vector<RawUdpTxHeaderPatch>&) {
+  return Status::NOT_SUPPORTED;
+}
+
 Status Engine::add_endpoint(const RawUdpEndpointConfig& config, EndpointId* endpoint_id) {
   (void)config;
   (void)endpoint_id;

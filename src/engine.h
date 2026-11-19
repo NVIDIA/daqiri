@@ -398,6 +398,11 @@ class Engine {
   // call multiple times and on partial-init failures. Resets
   // eal_initialized_ to false on the way out.
   void cleanup_eal();
+
+ public:
+  virtual Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst,
+                               const RawUdpTxHeaderTemplate& header,
+                               const std::vector<RawUdpTxHeaderPatch>& patches);
 };
 
 class EngineFactory {

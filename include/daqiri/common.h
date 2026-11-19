@@ -1113,6 +1113,18 @@ Status clone_tx_burst(const BurstParams* source, uint32_t shared_segment_mask, B
  */
 Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst);
 
+/**
+ * Send a raw ibverbs named-endpoint burst with a reusable application header.
+ * The header follows UDP and precedes all gathered TX segments. Each patch
+ * supplies width * num_packets bytes in packet order, already in wire format.
+ * Patch ranges are relative to the application header and must be disjoint.
+ * The template and patch buffers are only borrowed for the duration of the call.
+ * SUCCESS and NO_SPACE_AVAILABLE consume the burst. Other statuses retain it.
+ */
+Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst,
+                     const RawUdpTxHeaderTemplate& header,
+                     const std::vector<RawUdpTxHeaderPatch>& patches = {});
+
 /** Add a named raw IPv4/UDP endpoint to the active ibverbs engine. */
 Status add_endpoint(const RawUdpEndpointConfig& config, EndpointId* endpoint_id);
 

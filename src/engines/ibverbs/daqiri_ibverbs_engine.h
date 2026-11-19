@@ -432,6 +432,7 @@ struct IbvTxQueue {
   // The mlx5 QP must be created with matching inline capacity first.
   bool cpu_inline_enabled = false;
   uint32_t max_inline_data = 0;
+  uint8_t max_app_header_bytes = 0;
   uint32_t tx_cq_ci = 0;  // TX CQ consumer index
   // Slots are handed out cyclically and posted/completed in order, so the whole
   // free/in-flight lifecycle is two counters instead of rings (slot k lives at
@@ -551,6 +552,9 @@ class IbverbsEngine : public Engine {
   Status get_rx_burst(BurstParams** burst, int port) override;
   Status send_tx_burst(BurstParams* burst) override;
   Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst) override;
+  Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst,
+                       const RawUdpTxHeaderTemplate& header,
+                       const std::vector<RawUdpTxHeaderPatch>& patches) override;
   Status add_endpoint(const RawUdpEndpointConfig& config, EndpointId* endpoint_id) override;
   Status get_endpoint_id(const std::string& name, EndpointId* endpoint_id) override;
   Status delete_endpoint(EndpointId endpoint_id) override;
@@ -740,7 +744,10 @@ class IbverbsEngine : public Engine {
   void post_tx_burst(IbvTxQueue& q, BurstParams* burst);  // build send WQEs + ring doorbell
   void post_endpoint_inline_burst(IbvTxQueue& q, BurstParams* burst);
   Status prepare_endpoint_tx_burst(const IbvTxQueue& q, const EndpointFastPath& endpoint,
-                                   BurstParams* burst);
+                                   BurstParams* burst, const RawUdpTxHeaderTemplate& header = {},
+                                   const std::vector<RawUdpTxHeaderPatch>& patches = {});
+  Status submit_tx_burst(IbvTxQueue& q, BurstParams* burst);
+  void recycle_tx_metadata(BurstParams* burst);
   void post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst, uint16_t first_packet = 0);
   // Build a WAIT-on-time WQE (ctrl + wseg = 1 WQEBB, no slot) at q.sq_pi that
   // holds the following send(s) until the NIC real-time clock reaches when_ns,

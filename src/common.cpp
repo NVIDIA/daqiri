@@ -676,6 +676,13 @@ Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* bur
   return g_daqiri_engine->send_tx_burst(endpoint_id, queue_id, burst);
 }
 
+Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst,
+                     const RawUdpTxHeaderTemplate& header,
+                     const std::vector<RawUdpTxHeaderPatch>& patches) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->send_tx_burst(endpoint_id, queue_id, burst, header, patches);
+}
+
 Status add_endpoint(const RawUdpEndpointConfig& config, EndpointId* endpoint_id) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
   return g_daqiri_engine->add_endpoint(config, endpoint_id);

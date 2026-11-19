@@ -23,8 +23,8 @@ void require(bool condition, const char* message) {
 // CQ, and doorbell memory. No NIC, GPU, CUDA context, or verbs calls are needed.
 class IbverbsEngineTxTestPeer {
  public:
-  static void tx_timestamps(int segments, bool endpoint, bool direct, bool scheduled,
-                            bool realtime) {
+  static void tx_timestamps(int segments, bool endpoint, bool direct, bool scheduled, bool realtime,
+                            bool templated = false) {
     IbverbsEngine engine;
     engine.max_batch_ = 4;
     engine.cfg_.rx_meta_buffers_ = engine.cfg_.tx_meta_buffers_ = 8;
@@ -37,6 +37,7 @@ class IbverbsEngineTxTestPeer {
     q.port_id = q.queue_id = 0;
     q.state = ResourceState::ACTIVE;
     q.poll_mode = direct ? QueuePollMode::DIRECT : QueuePollMode::INDIRECT;
+    q.max_app_header_bytes = 32;
     q.accurate_send = realtime;
     q.send_scheduling = scheduled;
     q.empw_enabled = true;  // Requests must bypass packing, even on a capable NIC.
@@ -44,6 +45,12 @@ class IbverbsEngineTxTestPeer {
     q.num_segs = segments;
     q.send_ring = Ring::create("timestamp_test", 8, RingMode::SPSC);
     engine.tx_queue_table_[0][0].store(&q);
+    constexpr EndpointId endpoint_id = (uint64_t{1} << 32) | 1;
+    if (templated) {
+      require(engine.initialize_endpoint_slots(), "endpoint slot setup failed");
+      engine.endpoint_slots_[0].mtu = 1500;
+      engine.endpoint_slots_[0].published_id.store(endpoint_id);
+    }
     alignas(64) std::array<uint8_t, 32 * 64> sq{};
     alignas(64) std::array<uint8_t, 512> bf{};
     alignas(64) std::array<mlx5_cqe64, 8> cq{};
@@ -104,26 +111,55 @@ class IbverbsEngineTxTestPeer {
       if (scheduled)
         require(engine.set_packet_tx_time(burst, 0, 123456789) == Status::SUCCESS,
                 "schedule assignment failed");
-      if (endpoint) {
+      if (endpoint && !templated) {
         IbverbsEngine::EndpointFastPath destination;
         destination.mtu = 1500;
         require(engine.prepare_endpoint_tx_burst(q, destination, burst) == Status::SUCCESS,
                 "timestamp endpoint preparation failed");
       }
-      const uint32_t blocks = endpoint ? (segments == 4 ? 3 : 2) : (segments > 2 ? 2 : 1);
-      require(engine.tx_burst_wqebbs(q, burst) == blocks * packets + (scheduled ? 1 : 0),
-              "timestamp requests did not bypass eMPW SQ accounting");
+      const uint32_t blocks = endpoint ? (segments == 4 || (templated && segments > 1) ? 3 : 2)
+                                       : (segments > 2 ? 2 : 1);
+      if (!templated)
+        require(engine.tx_burst_wqebbs(q, burst) == blocks * packets + (scheduled ? 1 : 0),
+                "timestamp requests did not bypass eMPW SQ accounting");
       const uint64_t first_send = q.sq_pi + (scheduled ? 1 : 0);
       // Release while in flight must not affect a later request or transmission.
       if (iteration == 1)
         require(engine.release_tx_timestamp(ids[0]) == Status::SUCCESS,
                 "pending timestamp release failed");
-      require(engine.send_tx_burst(burst) == Status::SUCCESS, "timestamp send failed");
+      if (templated) {
+        RawUdpTxHeaderTemplate header{};
+        header.length = header.bytes.size();
+        header.bytes[3] = 0x56;
+        const std::array<uint8_t, 3> values{0x12, 0x34, 0x56};
+        const std::vector<RawUdpTxHeaderPatch> patches{
+            {0, 1, values.data(), static_cast<size_t>(packets)}};
+        if (iteration == 0) {
+          require(engine.send_tx_burst(endpoint_id, 1, burst, header, patches) ==
+                      Status::INVALID_PARAMETER,
+                  "template accepted the wrong queue");
+          const auto flags = burst->hdr.hdr.burst_flags;
+          const auto capacity = q.sq_capacity_wqebbs;
+          q.sq_capacity_wqebbs = 1;
+          require(engine.send_tx_burst(endpoint_id, 0, burst, header, patches) ==
+                          Status::INVALID_PARAMETER &&
+                      burst->hdr.hdr.burst_flags == flags,
+                  "oversized template submission changed ownership state");
+          q.sq_capacity_wqebbs = capacity;
+        }
+        require(engine.send_tx_burst(endpoint_id, 0, burst, header, patches) == Status::SUCCESS,
+                "templated timestamp send failed");
+      } else {
+        require(engine.send_tx_burst(burst) == Status::SUCCESS, "timestamp send failed");
+      }
       if (!direct) {
         void* raw = nullptr;
         require(q.send_ring->dequeue(&raw), "missing timestamp handoff");
-        engine.post_tx_burst(q, static_cast<BurstParams*>(raw));
-        engine.tx_meta_pool_->put(raw);
+        auto* queued = static_cast<BurstParams*>(raw);
+        require(engine.tx_burst_wqebbs(q, queued) == blocks * packets + (scheduled ? 1 : 0),
+                "incorrect queued SEND/WAIT credit accounting");
+        engine.post_tx_burst(q, queued);
+        engine.recycle_tx_metadata(queued);
       }
       // The production send path has already recycled the burst metadata.
       for (int i = 0; i < packets; ++i) {
@@ -216,8 +252,12 @@ class IbverbsEngineTxTestPeer {
     q.send_ring = nullptr;
   }
 
-  static void gathered_send(int segments, bool endpoint, bool direct, bool wait) {
+  static void gathered_send(int segments, bool endpoint, bool direct, bool wait,
+                            size_t app_length = 0, bool patched = false) {
     IbverbsEngine engine;
+    engine.max_batch_ = 2;
+    engine.cfg_.rx_meta_buffers_ = engine.cfg_.tx_meta_buffers_ = 4;
+    require(engine.initialize_burst_pools(), "metadata setup failed");
     IbvTxQueue q;
     q.port_id = q.queue_id = 0;
     constexpr uint32_t kBlocks = 16;
@@ -231,6 +271,7 @@ class IbverbsEngineTxTestPeer {
     for (auto& cqe : cq) cqe.op_own = MLX5_CQE_INVALID << 4;
     q.num_segs = segments;
     q.poll_mode = direct ? QueuePollMode::DIRECT : QueuePollMode::INDIRECT;
+    q.max_app_header_bytes = 32;
     q.sqn = 0x1234;
     // Cross both SQ wraparound and the CQE's 16-bit WQE counter wraparound.
     const uint64_t start = wait ? 65534 : 65535;
@@ -249,7 +290,8 @@ class IbverbsEngineTxTestPeer {
     q.wqe_slot_cum.resize(kBlocks);
     q.wqe_wqebb_cum.resize(kBlocks);
 
-    BurstParams burst{};
+    auto& burst = *engine.create_tx_burst_params();
+    burst.hdr.hdr.port_id = burst.hdr.hdr.q_id = 0;
     burst.hdr.hdr.num_pkts = direct ? 1 : 2;
     burst.hdr.hdr.num_segs = segments;
     std::array<std::array<void*, 2>, MAX_NUM_SEGS> pointers{};
@@ -272,11 +314,26 @@ class IbverbsEngineTxTestPeer {
       destination.header_template.ip.ihl = 5;
       destination.header_template.ip.protocol = IPPROTO_UDP;
       destination.header_template.udp.dest = htobe16(12345);
-      require(engine.prepare_endpoint_tx_burst(q, destination, &burst) == Status::SUCCESS,
-              "endpoint preparation failed");
+      RawUdpTxHeaderTemplate header{};
+      header.length = app_length;
+      header.bytes.fill(0x5a);
+      std::array<uint8_t, 2> tail{0xa0, 0xa1};
+      std::array<uint8_t, 4> lead{0xb0, 0xc0, 0xb1, 0xc1};
+      std::vector<RawUdpTxHeaderPatch> patches;
+      const size_t packets = burst.hdr.hdr.num_pkts;
+      if (patched)
+        patches = {{app_length - 1, 1, tail.data(), packets}, {0, 2, lead.data(), 2 * packets}};
+      require(engine.prepare_endpoint_tx_burst(q, destination, &burst, header, patches) ==
+                  Status::SUCCESS,
+              "endpoint template preparation failed");
+      // Indirect callers can overwrite both inputs before the worker posts.
+      header.bytes.fill(0xff);
+      tail.fill(0xff);
+      lead.fill(0xff);
     }
 
-    const uint32_t blocks_per_send = endpoint ? (segments == 4 ? 3 : 2) : (segments > 2 ? 2 : 1);
+    const size_t data_offset = endpoint ? ((30 + 42 + app_length + 15) / 16) * 16 : 32;
+    const uint32_t blocks_per_send = (data_offset + 16 * segments + 63) / 64;
     const uint64_t expected_blocks = blocks_per_send * burst.hdr.hdr.num_pkts;
     require(engine.tx_burst_wqebbs(q, &burst) == expected_blocks, "incorrect SQ reservation");
     require(engine.get_burst_tot_byte(&burst) == expected_bytes,
@@ -305,10 +362,8 @@ class IbverbsEngineTxTestPeer {
       }
       const auto* ctrl = reinterpret_cast<const mlx5_wqe_ctrl_seg*>(wqe.data());
       require((be32toh(ctrl->opmod_idx_opcode) & 0xff) == MLX5_OPCODE_SEND, "SEND overwritten");
-      require(
-          (be32toh(ctrl->qpn_ds) & 0x3f) == static_cast<uint32_t>(segments + (endpoint ? 5 : 2)),
-          "incorrect encoded WQE length");
-      const size_t data_offset = endpoint ? 80 : 32;
+      require((be32toh(ctrl->qpn_ds) & 0x3f) == data_offset / 16 + segments,
+              "incorrect encoded WQE length");
       const auto* data = reinterpret_cast<const mlx5_wqe_data_seg*>(wqe.data() + data_offset);
       for (int s = 0; s < segments; ++s) {
         require(be32toh(data[s].byte_count) == lengths[s][packet], "incorrect segment length");
@@ -318,13 +373,27 @@ class IbverbsEngineTxTestPeer {
       }
       if (endpoint) {
         UDPIPV4Pkt header;
-        std::memcpy(&header, wqe.data() + 16 + offsetof(mlx5_wqe_eth_seg, inline_hdr_start),
-                    sizeof(header));
+        const auto* eth = reinterpret_cast<const mlx5_wqe_eth_seg*>(wqe.data() + 16);
+        const auto* inline_header = wqe.data() + 16 + offsetof(mlx5_wqe_eth_seg, inline_hdr_start);
+        std::memcpy(&header, inline_header, sizeof(header));
         uint32_t payload = 0;
         for (int s = 0; s < segments; ++s) payload += lengths[s][packet];
-        require(be16toh(header.udp.len) == payload + 8, "endpoint UDP length misses segments");
-        require(be16toh(header.ip.tot_len) == payload + 28, "endpoint IP length misses segments");
+        require(be16toh(eth->inline_hdr_sz) == sizeof(header) + app_length,
+                "incorrect inline header length");
+        require(eth->cs_flags == (MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM) &&
+                    header.ip.check == 0 && header.udp.check == 0,
+                "checksum offload flags or fields incorrect");
+        require(be16toh(header.udp.len) == payload + app_length + 8, "incorrect UDP length");
+        require(be16toh(header.ip.tot_len) == payload + app_length + 28, "incorrect IPv4 length");
         require(be16toh(header.udp.dest) == 12345, "endpoint header overwritten");
+        std::vector<uint8_t> expected(app_length, 0x5a);
+        if (patched) {
+          expected[0] = 0xb0 + packet;
+          expected[1] = 0xc0 + packet;
+          expected.back() = 0xa0 + packet;
+        }
+        require(std::equal(expected.begin(), expected.end(), inline_header + sizeof(header)),
+                "application template or per-packet patch bytes are incorrect");
       }
       require(q.wqe_slot_cum[index] == packet + 1, "incorrect cumulative packet mapping");
       require(q.wqe_wqebb_cum[index] == wqe_start + blocks_per_send,
@@ -339,6 +408,7 @@ class IbverbsEngineTxTestPeer {
     require(be32toh(cq_db) == 1, "incorrect CQ doorbell");
     engine.poll_tx_completions(q);
     require(q.completed_tail.load() == burst.hdr.hdr.num_pkts, "completion reclaimed twice");
+    engine.recycle_tx_metadata(&burst);
   }
 
   static void shared_pool() {
@@ -382,6 +452,7 @@ class IbverbsEngineTxTestPeer {
     q.num_segs = segments;
     q.num_slots = 4;
     q.state = ResourceState::ACTIVE;
+    q.max_app_header_bytes = 32;
     q.shared_tx = std::make_unique<detail::SharedTxState>();
     q.accurate_send = true;
     q.shared_tx->ledger.resize(4);
@@ -427,15 +498,20 @@ class IbverbsEngineTxTestPeer {
       return burst;
     };
     auto post = [&](BurstParams* burst) {
-      if (endpoint)
-        require(engine.prepare_endpoint_tx_burst(q, destination, burst) == Status::SUCCESS,
+      if (endpoint) {
+        const RawUdpTxHeaderTemplate header{{0x5a}, 32};
+        const std::array<uint8_t, 2> values{0x7a, 0x7b};
+        require(engine.prepare_endpoint_tx_burst(
+                    q, destination, burst, header,
+                    {{31, 1, values.data(), burst->hdr.hdr.num_pkts}}) == Status::SUCCESS,
                 "endpoint preparation failed");
+      }
       require(engine.send_tx_burst(burst) == Status::SUCCESS, "shared submission failed");
       void* raw = nullptr;
       require(q.send_ring->dequeue(&raw) && raw == burst, "handoff ownership lost");
       engine.post_tx_burst(q, burst);
-      engine.tx_meta_pool_->put(burst);  // Production worker recycles before completion.
-      const uint32_t blocks = endpoint ? (segments == 4 ? 3 : 2) : (segments > 2 ? 2 : 1);
+      engine.recycle_tx_metadata(burst);  // Production worker recycles before completion.
+      const uint32_t blocks = endpoint ? (segments == 1 ? 2 : 3) : (segments > 2 ? 2 : 1);
       return q.sq_pi - blocks;
     };
     auto complete = [&](uint64_t wqe) {
@@ -768,10 +844,43 @@ class IbverbsEngineTxTestPeer {
     require(engine.prepare_endpoint_tx_burst(q, endpoint, &burst) == Status::INVALID_PARAMETER,
             "endpoint ignored an individual segment capacity");
     lengths = {16, 16, 16};
+    q.max_app_header_bytes = 32;
+    RawUdpTxHeaderTemplate header{{}, 8};
+    const std::array<uint8_t, 8> values{};
+    for (const std::vector<RawUdpTxHeaderPatch>& patches : {
+             std::vector<RawUdpTxHeaderPatch>{{0, 0, values.data(), 0}},
+             std::vector<RawUdpTxHeaderPatch>{{8, 1, values.data(), 1}},
+             std::vector<RawUdpTxHeaderPatch>{{7, 2, values.data(), 2}},
+             std::vector<RawUdpTxHeaderPatch>{{0, 2, values.data(), 1}},
+             std::vector<RawUdpTxHeaderPatch>{{0, 2, values.data(), 4}},
+             std::vector<RawUdpTxHeaderPatch>{{0, 2, nullptr, 2}},
+             std::vector<RawUdpTxHeaderPatch>{{0, 2, values.data(), 2}, {1, 1, values.data(), 1}},
+         }) {
+      require(engine.prepare_endpoint_tx_burst(q, endpoint, &burst, header, patches) ==
+                      Status::INVALID_PARAMETER &&
+                  burst.hdr.hdr.burst_flags == 0,
+              "invalid patch list changed ownership state");
+    }
+    header.length = 33;
+    require(
+        engine.prepare_endpoint_tx_burst(q, endpoint, &burst, header) == Status::INVALID_PARAMETER,
+        "oversized application template accepted");
+    header.length = 8;
+    q.max_app_header_bytes = 7;
+    require(engine.prepare_endpoint_tx_burst(q, endpoint, &burst, header) == Status::NOT_SUPPORTED,
+            "template exceeded descriptor capacity");
+    q.max_app_header_bytes = 32;
     burst.hdr.hdr.num_segs = 2;
     require(engine.prepare_endpoint_tx_burst(q, endpoint, &burst) == Status::INVALID_PARAMETER,
             "endpoint accepted a segment-count mismatch");
-
+    burst.hdr.hdr.num_segs = 3;
+    endpoint.mtu = 97;
+    require(
+        engine.prepare_endpoint_tx_burst(q, endpoint, &burst, header) == Status::INVALID_PARAMETER,
+        "application header omitted from frame MTU");
+    endpoint.mtu = 98;
+    require(engine.prepare_endpoint_tx_burst(q, endpoint, &burst, header) == Status::SUCCESS,
+            "template rejected at exact frame MTU");
     InterfaceConfig interface;
     TxQueueConfig config;
     config.common_.mrs_ = {"a", "b", "c", "d", "e"};
@@ -798,6 +907,11 @@ int main() {
           }
         }
       }
+      daqiri::IbverbsEngineTxTestPeer::gathered_send(segments, true, false, false, 7);
+      daqiri::IbverbsEngineTxTestPeer::gathered_send(segments, true, false, true, 32, true);
+      daqiri::IbverbsEngineTxTestPeer::gathered_send(segments, true, true, false, 32, true);
+      daqiri::IbverbsEngineTxTestPeer::tx_timestamps(segments, true, false, true, true, true);
+      daqiri::IbverbsEngineTxTestPeer::tx_timestamps(segments, true, true, true, true, true);
     }
     daqiri::IbverbsEngineTxTestPeer::shared_configuration();
     daqiri::IbverbsEngineTxTestPeer::shared_pool();
