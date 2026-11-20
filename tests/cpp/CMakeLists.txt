@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 if(TARGET daqiri_mgbe)
+  find_package(Threads REQUIRED)
   add_executable(daqiri_mgbe_engine_test mgbe_engine_test.cpp)
   target_compile_features(daqiri_mgbe_engine_test PRIVATE cxx_std_17)
   target_include_directories(daqiri_mgbe_engine_test PRIVATE ${PROJECT_SOURCE_DIR}
@@ -23,6 +24,13 @@ if(TARGET daqiri_mgbe)
   target_include_directories(daqiri_mgbe_queue_test PRIVATE ${PROJECT_SOURCE_DIR}/drivers/mgbe/include)
   target_compile_options(daqiri_mgbe_queue_test PRIVATE -UNDEBUG)
   add_test(NAME daqiri_mgbe_queue_test COMMAND daqiri_mgbe_queue_test)
+  add_executable(daqiri_mgbe_tap_test ${PROJECT_SOURCE_DIR}/drivers/mgbe/tests/tap_test.cpp
+    ${PROJECT_SOURCE_DIR}/drivers/mgbe/src/mgbe_tap.cpp)
+  target_compile_features(daqiri_mgbe_tap_test PRIVATE cxx_std_17)
+  target_include_directories(daqiri_mgbe_tap_test PRIVATE ${PROJECT_SOURCE_DIR}/drivers/mgbe/include)
+  target_compile_options(daqiri_mgbe_tap_test PRIVATE -UNDEBUG)
+  target_link_libraries(daqiri_mgbe_tap_test PRIVATE Threads::Threads)
+  add_test(NAME daqiri_mgbe_tap_test COMMAND daqiri_mgbe_tap_test)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_test(NAME daqiri_mgbe_module_recovery_test COMMAND ${Python3_EXECUTABLE}
     ${PROJECT_SOURCE_DIR}/drivers/mgbe/tests/module_recovery_test.py)

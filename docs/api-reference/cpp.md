@@ -1402,3 +1402,13 @@ cleanup. Indirect mode permits concurrent application owners of distinct bursts.
 the engine until hardware completion. Optional
 flow/resource operations, GPU memory, timestamps and scheduling are unsupported.
 See [driver build, installation and configuration](../tutorials/mgbe-driver.md).
+
+The optional `mgbe::KernelTap` helper (`mgbe_tap.hpp`) exposes a Linux TAP
+exception path while the PMD owns the physical port. Applications copy
+unhandled Ethernet frames with `send_to_kernel()` before freeing their RX
+bursts. Bounded queues hand those copies to a worker on a chosen CPU.
+`mgbe::transmit_from_kernel()` (`mgbe_tap_daqiri.hpp`) sends at most one
+kernel-return frame through the ordinary DAQIRI API; call it from the selected
+TX queue's owner. Neither handoff allocates per packet. Monitor queue drops and
+worker faults, and quiesce callers before stopping the helper. Linux addresses
+belong to the virtual TAP, which disappears when the helper closes its FD.

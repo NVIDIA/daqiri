@@ -2,7 +2,10 @@
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
   message(FATAL_ERROR "The MGBE engine requires Linux")
 endif()
+find_package(Threads REQUIRED)
+target_link_libraries(${ENGINE_TARGET} PRIVATE Threads::Threads)
 target_sources(${ENGINE_TARGET} PRIVATE daqiri_mgbe_engine.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/../../../drivers/mgbe/src/mgbe_pmd.cpp)
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../../drivers/mgbe/src/mgbe_pmd.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../../drivers/mgbe/src/mgbe_tap.cpp)
 target_include_directories(${ENGINE_TARGET} PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../drivers/mgbe/include)

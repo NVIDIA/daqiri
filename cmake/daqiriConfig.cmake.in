@@ -2,6 +2,7 @@
 
 include(CMakeFindDependencyMacro)
 find_dependency(CUDAToolkit)
+find_dependency(Threads)
 set(DAQIRI_ENABLE_OTEL_METRICS @DAQIRI_ENABLE_OTEL_METRICS@)
 if(DAQIRI_ENABLE_OTEL_METRICS)
   find_dependency(opentelemetry-cpp CONFIG COMPONENTS api)

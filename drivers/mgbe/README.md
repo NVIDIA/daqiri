@@ -65,7 +65,8 @@ remain unchanged; select MGBE explicitly.
   are needed to spread receive work over cores. Applications filter traffic.
   Unsupported configuration fails the native validator before hardware opens.
 
-Raw Ethernet frames are exposed directly, with no IP address assigned to Linux.
+Raw Ethernet frames are exposed directly. Leave the physical Linux netdev
+unaddressed; the optional TAP below can carry Linux addresses.
 The Ethernet/IPv4/UDP header helpers fill the source MAC, calculate the IPv4
 checksum in software and use a legal zero UDP checksum. Applications may also
 construct complete raw frames themselves. Hardware timestamps and optional
@@ -93,6 +94,64 @@ queues. TX-only and continuously busy applications reclaim when the TX ring
 needs credits; `wait_for_tx_idle()` explicitly drains completions at shutdown.
 No hardware-owned TX slot is reused before its ordered completion and DMA read
 barrier. The indirect worker retains its normal completion and batching loop.
+
+## Optional Linux kernel exception path
+
+`mgbe::KernelTap` provides a bidirectional TAP interface for Ethernet frames an
+application chooses to hand to Linux. The PMD retains exclusive ownership of
+the physical port; Linux addresses and routes belong to the virtual TAP.
+Rebuild DAQIRI and its echo example to use the helper with the existing control
+ABI. Creating the TAP requires `CAP_NET_ADMIN` and `/dev/net/tun`.
+
+`send_to_kernel()` copies a frame into a bounded preallocated handoff queue,
+so the caller can immediately release its DMA RX buffer. It returns false on
+queue exhaustion rather than blocking a poller. A worker pinned to
+`worker_cpu` performs TAP reads/writes under `SCHED_OTHER`, even when its creator
+uses a real-time policy. Producers make no wakeup syscall; the worker uses a
+1-ms polling timeout to check their queue. This adds latency to
+the kernel exception path. Measure the fast path's tail latency under the
+expected exception load.
+
+Call `mgbe::transmit_from_kernel()` on the normal DAQIRI TX queue owner, after
+latency-sensitive work. It submits at most one kernel-return frame per call,
+using the ordinary DAQIRI API. The worker never accesses NIC DMA queues. The
+handoffs permit multiple producers/consumers; each NIC TX queue still has one
+owner. Keep the TAP MTU within the configured DAQIRI frame capacity. TAP
+checksum/GSO offloads are disabled, and short kernel frames are zero-padded to
+the minimum Ethernet size.
+
+The echo example enables this explicitly:
+
+```bash
+# After acquiring the port as described below; select available CPUs.
+sudo taskset -c 10 build/mgbe/examples/daqiri_mgbe_raw_echo \
+  drivers/mgbe/config/daqiri_mgbe_latency.yaml \
+  --tap mgbe-kernel0 --tap-cpu 2 --udp-port 9000
+
+# In another terminal, while the example runs:
+sudo ip address add 198.18.77.1/30 dev mgbe-kernel0
+```
+
+With TAP enabled, the example echoes unfragmented IPv4/UDP frames for the
+selected destination port (default 9000) and forwards other received frames,
+including ARP and ICMP, to Linux. It supports one physical interface with
+multiple queue pairs; kernel-return TX uses queue zero. Its ordinary echo
+behavior is retained when TAP is omitted. Give the cabled peer a compatible IP
+address to use ordinary Linux sockets or ping the TAP address.
+
+The TAP requires a new name; existing interfaces are refused. It is
+nonpersistent: closing its FD removes the interface and its addresses/routes.
+Quiesce application producers/consumers before `stop()`. Shutdown stops the
+worker and reports discarded queued frames; worker faults surface as
+exceptions. Monitor these counters and apply an explicit policy for drops.
+For multiple ports, create a helper per physical port with its MAC and MTU.
+
+Custom DAQIRI applications include `mgbe_tap_daqiri.hpp`, add the driver include
+directory, and link the MGBE engine library alongside DAQIRI (installed CMake
+targets `daqiri::mgbe` and `daqiri::daqiri`). Headers are packaged under
+`share/daqiri/drivers/mgbe/include`. The standalone driver CMake project also
+builds the helper in `daqiri_mgbe_driver` without a DAQIRI dependency; use
+`has_tx()`/`receive_from_kernel()` with that driver's TX API.
 
 ## Selecting indirect mode
 
@@ -292,6 +351,20 @@ can invoke the installed management script with host `sudo python3` instead of
 the source-tree container wrapper.
 
 ## Correctness checks
+
+Hardware-free TAP tests cover frame copies, concurrent producers/consumers, queue wrap,
+backpressure, short-frame padding, worker faults and cleanup. The standalone
+`mgbe_tap_stack_test` verifies real Linux ARP/ICMP responses, exclusive creation
+and partial-failure cleanup. It creates a disposable network namespace before
+assigning test addresses, requires root with `CAP_SYS_ADMIN`/`CAP_NET_ADMIN`,
+and is not registered with CTest:
+
+```bash
+cmake -S drivers/mgbe -B build/mgbe-driver-tests -DBUILD_TESTING=ON
+cmake --build build/mgbe-driver-tests -j
+ctest --test-dir build/mgbe-driver-tests --output-on-failure
+sudo build/mgbe-driver-tests/mgbe_tap_stack_test
+```
 
 The MGBE-enabled CTests cover configuration rejection before device acquisition,
 RX ownership and out-of-order release, TX completion ownership/exhaustion,

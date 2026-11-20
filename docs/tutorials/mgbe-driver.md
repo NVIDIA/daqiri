@@ -101,3 +101,31 @@ for the pinned vendor source, headers, container commands, installed artifacts
 and cabled echo smoke test. The source-tree instructions live at
 `drivers/mgbe/README.md` and the complete sample is
 `drivers/mgbe/config/daqiri_mgbe.yaml`.
+
+## Hand unhandled frames to Linux
+
+The optional TAP helper lets Linux handle ARP, ICMP and socket traffic while
+DAQIRI owns the physical port. Rebuild the library and echo example, then run:
+
+```bash
+sudo taskset -c 10 build/mgbe/examples/daqiri_mgbe_raw_echo \
+  drivers/mgbe/config/daqiri_mgbe_latency.yaml \
+  --tap mgbe-kernel0 --tap-cpu 2 --udp-port 9000
+```
+
+Choose application/worker CPUs available on your machine. While the process
+runs, assign the Linux address to its TAP rather than to the physical netdev:
+
+```bash
+sudo ip address add 198.18.77.1/30 dev mgbe-kernel0
+```
+
+The example echoes IPv4/UDP destination port 9000 and copies other received
+frames into a bounded kernel handoff. Kernel replies return through DAQIRI TX
+queue zero on its application owner; the TAP worker performs kernel I/O on CPU
+2 under normal scheduling. This example supports one physical interface with
+multiple queue pairs. The helper is opt-in and requires `/dev/net/tun` and
+`CAP_NET_ADMIN`. Closing its nonpersistent FD removes the TAP and its routes.
+Queue exhaustion is reported as drops; applications should monitor it and
+measure latency under the intended kernel-traffic load. See the
+[C++ helper contract](../api-reference/cpp.md#tegra-mgbe-raw-ethernet).
