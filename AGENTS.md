@@ -49,6 +49,9 @@ CUDA architectures default to `80;90` (A100, H100), with `121` (GB10) added when
 
 ## Testing and benchmarks
 
+For CLI-driven bandwidth and latency baselines, follow the
+[perftest agent instructions](examples/perftest/AGENTS.md).
+
 Portable Python unit tests run without configuring or compiling DAQIRI:
 
 ```bash

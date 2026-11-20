@@ -278,7 +278,7 @@ need to enable a specific feature or adjust the build for a particular host.
 | `BUILD_SHARED_LIBS` | n/a | Use `ON` to produce `libdaqiri.so` and exported package metadata; use `OFF` only when you intentionally need static libraries. |
 | `DAQIRI_ENGINE` | `"dpdk ibverbs"` | Space-separated optional engines to compile. Valid values are `dpdk` and `ibverbs`; Linux UDP/TCP sockets are always built in. Use a smaller set only when packaging a narrower build. |
 | `DAQIRI_IBVERBS_DLOPEN` | `OFF` | Load the raw ibverbs and RoCE dependencies through versioned glue DSOs at engine initialization. Useful when statically linking DAQIRI while using shared RDMA libraries at runtime. |
-| `DAQIRI_BUILD_EXAMPLES` | `ON` | Builds the `daqiri_bench_*` executables under `build/examples/`. Leave on for smoke tests and benchmark workflows. The `daqiri_config_validate` tool is always built and installed, including when this option is `OFF`. |
+| `DAQIRI_BUILD_EXAMPLES` | `ON` | Builds the `daqiri_bench_*` executables under `build/examples/` and [`daqiri_perftest`](../benchmarks/perftest.md) in the build root. The `daqiri_config_validate` tool is always built and installed. |
 | `DAQIRI_BUILD_APPLICATIONS` | `OFF` | Builds heavier end-to-end examples under `applications/`, currently the TensorRT ResNet inference app. Requires the extra application dependencies. |
 | `DAQIRI_BUILD_PYTHON` | `OFF` | Builds pybind11 Python bindings. Enable only when you need `import daqiri`. |
 | `BUILD_TESTING` | `ON` | Builds and registers the hardware-free C++ tests under `tests/cpp/` with CTest. Set to `OFF` to omit test targets from a production-only build. |
