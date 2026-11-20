@@ -5,7 +5,6 @@
  */
 
 #include <daqiri/daqiri.h>
-#include <cuda_runtime_api.h>
 #include <yaml-cpp/yaml.h>
 
 #include "tcp_record.h"
@@ -149,7 +148,7 @@ class Control {
 struct Settings {
   std::string transport, role, client_ip, server_ip;
   bool raw, roce, tcp, latency, hardware, rtt, hardware_rtt, bidirectional, tx_direct, rx_direct;
-  bool named_sender;
+  bool named_sender, opaque_payload;
   int bytes, message_size, batch, rx_depth, tx_depth, samples, warmup_samples, realtime_priority;
   uint64_t duration, warmup, timeout;
 
@@ -169,6 +168,7 @@ struct Settings {
         tx_direct(cfg["tx_direct"].as<bool>()),
         rx_direct(cfg["rx_direct"].as<bool>()),
         named_sender(cfg["named_sender"].as<bool>(false)),
+        opaque_payload(cfg["opaque_payload"].as<bool>(false)),
         bytes(cfg["size"].as<int>()),
         message_size(cfg["message_size"].as<int>(0)),
         batch(cfg["batch"].as<int>()),
@@ -186,7 +186,7 @@ struct Settings {
   }
 
   int tx_buffer_bytes() const {
-    if (named_sender) return message_size;
+    if (named_sender) return bytes - kRawHeader;
     return message_size ? std::max(bytes, ETH_ZLEN) : bytes;
   }
 };
@@ -194,25 +194,13 @@ struct Settings {
 struct Segment {
   std::string name;
   int capacity;
-  int cuda_device;
+  bool device;
 
   explicit Segment(const YAML::Node& node)
       : name(node["name"].as<std::string>()),
         capacity(node["buf_size"].as<int>()),
-        cuda_device(node["kind"].as<std::string>() == "device" ? node["affinity"].as<int>() : -1) {}
+        device(node["kind"].as<std::string>() == "device") {}
 };
-
-void copy_packet(void* destination, const void* source, size_t bytes, int cuda_device) {
-  if (cuda_device < 0) {
-    std::memcpy(destination, source, bytes);
-    return;
-  }
-  auto result = cudaSetDevice(cuda_device);
-  if (result == cudaSuccess) result = cudaMemcpy(destination, source, bytes, cudaMemcpyDefault);
-  if (result != cudaSuccess) {
-    throw std::runtime_error("CUDA packet copy: " + std::string(cudaGetErrorString(result)));
-  }
-}
 
 struct Counts {
   uint64_t packets = 0;
@@ -234,11 +222,22 @@ class Lane {
         cpu_(node["cpu"].as<int>()),
         rx_app_cpu_(node["rx_app_cpu"].as<int>(cpu_)),
         server_port_(node["server_port"].as<uint16_t>()),
+        rx_flow_id_(node["rx_flow_id"].as<daqiri::FlowId>(0)),
         cfg_(settings),
         name_(node["interface"].as<std::string>()),
         packet_(cfg_.tx_buffer_bytes()) {
-    for (const auto& region : node["tx"]) tx_.emplace_back(region);
-    for (const auto& region : node["rx"]) rx_.emplace_back(region);
+    for (const auto& region : node["tx"]) {
+      tx_.emplace_back(region);
+      if (tx_.back().device && (!cfg_.opaque_payload || !region["zero_init"].as<bool>(false))) {
+        throw std::runtime_error("device TX requires zero-initialized opaque payload buffers");
+      }
+    }
+    for (const auto& region : node["rx"]) {
+      rx_.emplace_back(region);
+      if (rx_.back().device && !cfg_.opaque_payload) {
+        throw std::runtime_error("device RX requires opaque payload buffers");
+      }
+    }
     if (cfg_.named_sender && !tx_.empty()) {
       auto& sender = sender_config_.emplace();
       sender.name_ = "perftest-" + node["role"].as<std::string>() + "-" + std::to_string(queue);
@@ -393,11 +392,8 @@ class Lane {
     return false;
   }
 
-  bool prepares_device_echo() const {
-    auto device = [](const Segment& segment) { return segment.cuda_device >= 0; };
-    return cfg_.hardware_rtt && cfg_.tx_direct && cfg_.rx_direct &&
-           (std::any_of(tx_.begin(), tx_.end(), device) ||
-            std::any_of(rx_.begin(), rx_.end(), device));
+  bool prepares_echo() const {
+    return cfg_.raw && cfg_.rtt && cfg_.tx_direct && cfg_.rx_direct;
   }
 
   bool echo_prepared_probe(uint64_t id, uint64_t sequence, const Control& control) {
@@ -412,33 +408,24 @@ class Lane {
     } while (now_ns() < prepare_deadline);
     if (!reply) throw std::runtime_error("latency echo buffer preparation timed out");
 
-    control.send({sequence, 1, 0});
+    control.send({sequence, 0, 0});
     const auto receive_deadline = now_ns() + cfg_.timeout;
-    RxBurst received(nullptr, FreeRx{false});
-    int packet = 0;
     do {
       auto burst = poll(false, nullptr);
       if (!burst) continue;
       for (int i = 0; i < packet_count(burst.get()); ++i) {
-        if (!matches_frame_length(daqiri::get_packet_length(burst.get(), i))) continue;
+        if (!matches_receive_metadata(burst.get(), i)) continue;
         if (!post_burst(reply.release(), 1, false, nullptr, nullptr, nullptr)) {
           throw std::runtime_error("failed to send prepared latency echo");
         }
-        packet = i;
-        received = std::move(burst);
-        break;
+        // Host-memory requests carry a token. Validate it after posting.
+        if (!cfg_.opaque_payload && !matches_probe(burst.get(), i, id)) {
+          throw std::runtime_error("prepared latency echo received a mismatched probe");
+        }
+        return true;
       }
-    } while (!received && now_ns() < receive_deadline);
-
-    // The initiator acknowledges its RX observation before we read GPU memory.
-    // A stale or unexpected request invalidates the case, including its echo.
-    if (control.receive(cfg_.timeout)[0] != sequence) {
-      throw std::runtime_error("peer echo receipt sequence mismatch");
-    }
-    if (received && !matches_probe(received.get(), packet, id)) {
-      throw std::runtime_error("prepared latency echo received a mismatched probe");
-    }
-    return bool(received);
+    } while (now_ns() < receive_deadline);
+    return false;
   }
 
   ReceiveTime receive_probe(uint64_t id, uint64_t deadline, bool timestamp) {
@@ -514,12 +501,20 @@ class Lane {
   }
 
   void set_probe_id(uint64_t id) {
+    if (cfg_.opaque_payload) return;
     const uint64_t wire = htobe64(id);
     const int offset = cfg_.raw && !cfg_.named_sender ? kRawHeader : 0;
     std::memcpy(packet_.data() + offset, &wire, sizeof(wire));
   }
 
+  bool matches_receive_metadata(BurstParams* burst, int index) const {
+    return matches_frame_length(daqiri::get_packet_length(burst, index)) &&
+           (!cfg_.opaque_payload || !rx_flow_id_ ||
+            daqiri::get_packet_flow_id(burst, index) == rx_flow_id_);
+  }
+
   bool matches_probe(BurstParams* burst, int index, uint64_t expected) {
+    if (cfg_.opaque_payload) return matches_receive_metadata(burst, index);
     const int bytes = daqiri::get_packet_length(burst, index);
     if (cfg_.tcp) {
       auto* data = static_cast<const char*>(daqiri::get_segment_packet_ptr(burst, 0, index));
@@ -544,7 +539,7 @@ class Lane {
       }
       const int count = std::min(remaining, length - offset);
       auto* data = static_cast<char*>(daqiri::get_segment_packet_ptr(burst, i, index));
-      copy_packet(out, data + offset, count, rx_[i].cuda_device);
+      std::memcpy(out, data + offset, count);
       out += count;
       remaining -= count;
       offset = 0;
@@ -626,11 +621,15 @@ class Lane {
         if (receive) continue;
         int offset = 0;
         for (size_t j = 0; j < segments.size() && lengths[j]; ++j) {
+          if (segments[j].device) {
+            offset += lengths[j];
+            continue;
+          }
           auto* dest = daqiri::get_segment_packet_ptr(burst, j, i);
           // NIC-backed cyclic or pooled storage retains its template between
           // uses. The socket backend allocates fresh heap buffers per burst.
           if (probe || (!cfg_.raw && !cfg_.roce) || initialized_.insert(dest).second) {
-            copy_packet(dest, packet_.data() + offset, lengths[j], segments[j].cuda_device);
+            std::memcpy(dest, packet_.data() + offset, lengths[j]);
           }
           offset += lengths[j];
         }
@@ -677,6 +676,7 @@ class Lane {
 
   int qid_, cpu_, rx_app_cpu_;
   uint16_t server_port_, port_id_ = 0;
+  daqiri::FlowId rx_flow_id_;
   const Settings& cfg_;
   std::string name_;
   std::optional<daqiri::RawUdpEndpointConfig> sender_config_;
@@ -898,15 +898,13 @@ YAML::Node latency_phase(const Settings& cfg, Lane& lane, bool origin, const Con
   lane.prime();
   control.barrier(5);
   uint64_t nonce;
-  bool prepared_echo = false;
+  const bool prepared_echo = !origin && lane.prepares_echo();
   if (origin) {
     std::random_device random;
     nonce = (static_cast<uint64_t>(random()) << 32) | random();
-    control.send({nonce, cfg.hardware_rtt, 0});
+    control.send({nonce, 0, 0});
   } else {
-    const auto start = control.receive();
-    nonce = start[0];
-    prepared_echo = start[1] && lane.prepares_device_echo();
+    nonce = control.receive()[0];
   }
   int timeouts = 0;
   int consecutive_misses = 0;
@@ -944,11 +942,11 @@ YAML::Node latency_phase(const Settings& cfg, Lane& lane, bool origin, const Con
     if (sent && cfg.rtt) {
       echo = lane.receive_probe(probe_id, now_ns() + cfg.timeout, cfg.hardware && cfg.hardware_rtt);
     }
-    if (ready[1]) control.send({seq, 0, 0});
     const auto rx = control.receive(cfg.timeout);
     if (rx[0] != seq) throw std::runtime_error("peer RX sequence mismatch");
     const auto finish = cfg.rtt ? echo.software : rx[1];
     if (!sent || !finish || !rx[1]) {
+      if (cfg.opaque_payload) throw std::runtime_error("opaque latency probe timed out");
       if (measured) ++timeouts;
       if (++consecutive_misses == 3) throw std::runtime_error("three consecutive probe timeouts");
       continue;

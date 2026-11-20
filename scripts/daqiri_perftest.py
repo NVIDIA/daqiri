@@ -125,7 +125,8 @@ def parse_args(argv: list[str] | None = None):
         parser.add_argument(f"--{direction}-mr", action="append", type=region,
                             metavar="KIND:BYTES:COUNT[:AFFINITY]")
         parser.add_argument(f"--{direction}-cores", type=lambda s: [integer(v) for v in s.split(",")])
-        parser.add_argument(f"--{direction}-poll", choices=("direct", "indirect"), default="indirect")
+        parser.add_argument(f"--{direction}-poll", choices=("direct", "indirect"),
+                            help="defaults to direct for raw ibverbs and RoCE latency, indirect otherwise")
         parser.add_argument(f"--{direction}-depth", type=positive, help="RoCE work-request depth")
     sizes = parser.add_mutually_exclusive_group()
     sizes.add_argument("--size", type=positive, help="raw frame bytes or transport message bytes")
@@ -656,8 +657,9 @@ def main(argv=None) -> int:
             if validated.returncode:
                 raise ConfigError("generated configuration failed native validation")
             if args.named_sender:
-                print("Using the raw ibverbs named sender. Each message is one IPv4/UDP payload.",
-                      file=sys.stderr, flush=True)
+                message = ("Each message is one IPv4/UDP payload." if args.size_kind == "message"
+                           else "The named sender supplies the header. Packet sizes count full frames.")
+                print(f"Using the raw ibverbs named sender. {message}", file=sys.stderr, flush=True)
             if args.dry_run:
                 for path in configs:
                     print(path.read_text(), end="")
@@ -679,9 +681,13 @@ def main(argv=None) -> int:
                                        "hardware": clocks, "role": args.role,
                                        "findings": findings, "notices": notices,
                                        "benchmark_cpus": sorted(args.benchmark_cpus),
+                                       "opaque_payload": args.opaque_payload,
                                        "refresh_phc": True})
                 if hello["settings"] != settings(args) or hello["role"] == args.role:
                     raise ConfigError("benchmark peer settings or roles do not match")
+                if args.opaque_payload and "opaque_payload" not in hello:
+                    raise ConfigError("the benchmark peer does not support opaque device payloads")
+                args.opaque_payload |= hello.get("opaque_payload", False)
                 same_boot = bool(local_clock["boot"]) and local_clock["boot"] == hello["clock"].get("boot")
                 clocks |= hello["hardware"]
                 if same_boot and candidate and not args.hardware_rtt and hello.get("refresh_phc"):
@@ -715,9 +721,13 @@ def main(argv=None) -> int:
                 if candidate and not hardware:
                     warn("hardware latency is unavailable with the selected firmware or clock domains")
                 warn("software latencies include TX and RX processing")
+                if args.opaque_payload:
+                    print("Matching opaque probes by receive queue, length, and one probe in flight.",
+                          file=sys.stderr, flush=True)
             print("Preflight complete. Starting benchmark.", file=sys.stderr, flush=True)
             report = {"schema": 1, "settings": settings(args), "role": args.role,
-                      "engine": engine, "preflight": findings, "notices": notices,
+                      "engine": engine, "opaque_payload": args.opaque_payload,
+                      "preflight": findings, "notices": notices,
                       "peer_preflight": peer_findings, "peer_notices": peer_notices,
                       "hardware_preflight": clocks, "cases": []}
             all_samples = []

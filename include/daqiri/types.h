@@ -238,6 +238,10 @@ enum MemoryAccess {
   MEM_ACCESS_RELAXED_ORDERING = 1U << 3
 };
 
+// Local allocation policy in MemoryRegionConfig::access_. Excluded from
+// transport access permissions and exchanged memory descriptors.
+inline constexpr uint32_t MEM_INIT_ZERO = 1U << 4;
+
 /** Registered memory descriptor to exchange with a connected RDMA peer.
  * Values are valid only while the owning engine and registration remain alive.
  */

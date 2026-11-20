@@ -14,6 +14,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 LOCAL_UDP = ["--transport", "udp", "--topology", "same-host",
              "--client-address", "127.0.0.1", "--server-address", "127.0.0.1"]
+RAW_IBVERBS = ["--transport", "raw", "--engine", "ibverbs", "--topology", "hw-loopback",
+               "--interface", "p0"]
 
 
 @pytest.fixture
@@ -46,6 +48,32 @@ def test_socket_queue_pairs_have_distinct_ports_and_regions(frontend):
 def test_invalid_topology_and_queue_options(frontend, extra, match):
     with pytest.raises(frontend.ConfigError, match=match):
         frontend.resolve(frontend.parse_args(["bw", *LOCAL_UDP, *extra]))
+
+
+@pytest.mark.parametrize(("command", "tx_direct", "rx_direct"), [
+    (["lat", *RAW_IBVERBS], True, True),
+    (["lat", *RAW_IBVERBS, "--rx-poll", "indirect", "--rx-cores", "5"], True, False),
+    (["lat", *RAW_IBVERBS, "--tx-poll", "indirect"], False, True),
+    (["bw", *RAW_IBVERBS], False, False),
+    (["lat", "--transport", "roce", "--topology", "same-host", "--client-address", "192.0.2.1",
+      "--server-address", "192.0.2.2"], True, True),
+    (["lat", "--transport", "raw", "--engine", "dpdk", "--topology", "sw-loopback"], False, False),
+    (["lat", *LOCAL_UDP], False, False),
+])
+def test_polling_defaults_and_overrides(frontend, monkeypatch, command, tx_direct, rx_direct):
+    topology = importlib.import_module("daqiri_config.perftest")
+    monkeypatch.setattr(topology, "resolve_interface",
+                        lambda *_, **kw: topology.Interface("p0", "0000:03:00.0", "02:00:00:00:00:01"))
+    monkeypatch.setattr(topology, "socket_interfaces", lambda *_: {})
+    monkeypatch.setattr(topology, "run_ip", lambda *_: [{}])
+    args = frontend.parse_args(command)
+    frontend.resolve(args)
+    config = frontend.build_config(args, 0, hardware=False, rtt=False)
+    assert (config["perftest"]["tx_direct"], config["perftest"]["rx_direct"]) == (tx_direct, rx_direct)
+    for direction, direct in (("tx", tx_direct), ("rx", rx_direct)):
+        for interface in config["daqiri"]["cfg"]["interfaces"]:
+            for queue in interface.get(direction, {}).get("queues", []):
+                assert (queue.get("poll_mode") == "direct") is direct
 
 
 def test_rejects_ambiguous_bdf_without_netdev(frontend, tmp_path):
@@ -182,6 +210,41 @@ def test_raw_ibverbs_message_sizes_use_payload_only_tx(frontend, monkeypatch):
     assert args.tx_mr[0].buf_size == args.rx_mr[0].buf_size == 1400
     packet = frontend.build_config(args, 0, hardware=True, rtt=False)["perftest"]
     assert (packet["size"], packet["message_size"]) == (1400, 0)
+
+
+def test_raw_gpu_packet_uses_named_header_and_opaque_buffers(frontend, monkeypatch):
+    topology = importlib.import_module("daqiri_config.perftest")
+    monkeypatch.setattr(topology, "resolve_interface",
+                        lambda *_, **kw: topology.Interface("p0", "0000:03:00.0", "02:00:00:00:00:01"))
+    args = frontend.parse_args([
+        "lat", "--transport", "raw", "--engine", "ibverbs", "--topology", "hw-loopback",
+        "--interface", "p0", "--packet-size", "64", "--tx-mr", "device:22:4096",
+        "--rx-mr", "device:1400:4096",
+    ])
+    frontend.resolve(args)
+    document = frontend.build_config(args, 0, hardware=True, rtt=False)
+    worker = document["perftest"]
+    assert worker["named_sender"] and worker["opaque_payload"]
+    assert (worker["size"], worker["message_size"]) == (64, 0)
+    server, client = worker["lanes"]
+    assert client["tx"][0]["buf_size"] == 22 and client["tx"][0]["zero_init"]
+    assert "zero_init" not in server["rx"][0]
+    (interface,) = document["daqiri"]["cfg"]["interfaces"]
+    assert server["rx_flow_id"] == interface["rx"]["flows"][0]["id"]
+
+
+def test_raw_dpdk_device_payload_requires_host_header(frontend, monkeypatch):
+    topology = importlib.import_module("daqiri_config.perftest")
+    monkeypatch.setattr(topology, "resolve_interface",
+                        lambda name, **_: topology.Interface(name, "0000:03:00.0", "02:00:00:00:00:01"))
+    command = ["bw", "--transport", "raw", "--engine", "dpdk", "--topology", "two-host",
+               "--interface", "p0", "--role", "client", "--peer-mac", "02:00:00:00:00:02",
+               "--control", "127.0.0.1:18500", "--packet-size", "64"]
+    with pytest.raises(frontend.ConfigError, match="CPU-accessible bytes"):
+        frontend.resolve(frontend.parse_args([*command, "--tx-mr", "device:64:4096"]))
+    args = frontend.parse_args([*command, "--tx-mr", "huge:42:4096", "--tx-mr", "device:22:4096"])
+    frontend.resolve(args)
+    assert args.opaque_payload and not args.named_sender
 
 
 def test_named_sender_rx_storage_covers_ethernet_padding(frontend, monkeypatch):

@@ -1578,7 +1578,7 @@ Status RdmaEngine::rdma_get_memory_region(uintptr_t conn_id, const std::string& 
   region->address = reinterpret_cast<uintptr_t>(registration->second->addr);
   region->length = registration->second->length;
   region->rkey = registration->second->rkey;
-  region->access = mr->second.params_.access_;
+  region->access = mr->second.params_.access_ & ~MEM_INIT_ZERO;
   return Status::SUCCESS;
 }
 

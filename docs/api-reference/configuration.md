@@ -152,6 +152,9 @@ runtime binding.
     `local`. The RDMA engine also enables local-write registration permission
     whenever `rdma_write` is selected. See
     [RDMA reads and writes](cpp.md#rdma-reads-and-writes).
+- **`zero_init`** requests a one-time zero fill during allocation of a DAQIRI-owned
+  `device` region. It defaults to `false`. DAQIRI completes initialization before
+  handing the buffers to the data path.
 - **`num_bufs`**: Number of buffers in this region. Higher values give more processing
   headroom but consume more memory (GPU BAR1 for `device`). Too low risks dropped packets
   on RX or a TX stall. For socket TCP and UDP RX queues, the smallest `num_bufs` among the

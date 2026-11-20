@@ -249,9 +249,11 @@ def resolve(args) -> list[str]:
     if not args.raw and args.engine:
         raise ConfigError("--engine applies to raw Ethernet. --transport roce selects ibverbs.")
     resolve_sizes(args)
-    if (args.tx_poll == "direct" or args.rx_poll == "direct") and not (
-        args.engine == "ibverbs" or args.roce
-    ):
+    supports_direct = args.engine == "ibverbs" or args.roce
+    default_poll = "direct" if args.test == "lat" and supports_direct else "indirect"
+    args.tx_poll = args.tx_poll or default_poll
+    args.rx_poll = args.rx_poll or default_poll
+    if "direct" in (args.tx_poll, args.rx_poll) and not supports_direct:
         raise ConfigError("direct polling requires raw ibverbs or RoCE")
     if args.topology in ("hw-loopback", "sw-loopback"):
         engine = "ibverbs" if args.topology == "hw-loopback" else "dpdk"
@@ -338,6 +340,18 @@ def resolve(args) -> list[str]:
 
     default_kind = ("huge" if args.engine == "dpdk" else
                     "host_pinned" if (args.raw or args.roce) else "host")
+    if args.raw and not args.named_sender:
+        header_bytes = 0
+        for region in args.tx_mr or ():
+            if header_bytes >= UDP_IPV4_HEADER_SIZE:
+                break
+            if region.kind == "device":
+                if args.engine == "dpdk":
+                    raise ConfigError("DPDK TX needs 42 CPU-accessible bytes before device segments "
+                                      "for the Ethernet/IPv4/UDP header")
+                args.named_sender = True
+                break
+            header_bytes += region.buf_size
     for direction in ("tx", "rx"):
         depth = getattr(args, f"{direction}_depth") if args.roce else 0
         mode = getattr(args, f"{direction}_poll")
@@ -346,8 +360,10 @@ def resolve(args) -> list[str]:
                          else max(4096, 2 * batch, depth))
         attr = f"{direction}_mr"
         minimum_size = max(args.sizes)
-        if args.raw and args.size_kind == "message" and (direction == "rx" or not args.named_sender):
-            minimum_size = max(MIN_ETHERNET_FRAME_SIZE, frame_size(args, minimum_size))
+        if args.raw:
+            frame = frame_size(args, minimum_size)
+            minimum_size = (frame - UDP_IPV4_HEADER_SIZE if direction == "tx" and args.named_sender
+                            else max(MIN_ETHERNET_FRAME_SIZE, frame))
         regions = getattr(args, attr) or [Region(default_kind, minimum_size, default_count)]
         if len(regions) > (4 if args.raw else 1):
             raise ConfigError(f"too many {direction.upper()} segments for {args.transport}")
@@ -362,6 +378,7 @@ def resolve(args) -> list[str]:
         if args.raw and sum(region.buf_size for region in regions) > RAW_MAX_FRAME_SIZE:
             raise ConfigError(f"{direction.upper()} raw regions exceed the {RAW_MAX_FRAME_SIZE}-byte limit")
         setattr(args, attr, regions)
+    args.opaque_payload = any(region.kind == "device" for region in args.tx_mr + args.rx_mr)
     if args.topology == "sw-loopback" and (
         [(r.kind, r.buf_size, r.affinity) for r in args.tx_mr]
         != [(r.kind, r.buf_size, r.affinity) for r in args.rx_mr]
@@ -438,7 +455,8 @@ def build_config(args, case: int, *, hardware: bool, rtt: bool) -> dict:
                 lane["rx_app_cpu"] = args.rx_app_cores[lane_index]
             if args.raw:
                 lane.update(src_mac=interface.mac, dst_mac=(peer_interface.mac if peer_interface
-                                                              else args.peer_mac))
+                                                              else args.peer_mac),
+                            rx_flow_id=0 if loopback and args.engine == "dpdk" else 1 + lane_index)
             lanes.append(lane)
             if name not in interfaces:
                 intf = {"name": name, "address": ((interface.bdf or interface.name)
@@ -464,6 +482,10 @@ def build_config(args, case: int, *, hardware: bool, rtt: bool) -> dict:
                     dict(asdict(region), name=f"{role}_{queue}_{direction}_{index}", access=["local"])
                     for index, region in enumerate(getattr(args, f"{direction}_mr"))
                 ]
+                if direction == "tx":
+                    for region in region_specs:
+                        if region["kind"] == "device":
+                            region["zero_init"] = True
                 lane[direction] = region_specs
                 config["memory_regions"].extend(region_specs)
                 q = {"name": f"{role}_{direction}_{queue}", "id": qid}
@@ -499,6 +521,7 @@ def build_config(args, case: int, *, hardware: bool, rtt: bool) -> dict:
                          "size": frame_size(args, size),
                          "message_size": size if args.raw and args.size_kind == "message" else 0,
                          "named_sender": args.named_sender,
+                         "opaque_payload": args.opaque_payload,
                          "batch": 1 if args.tx_poll == "direct" else args.batch_size,
                          "tx_direct": args.tx_poll == "direct", "rx_direct": args.rx_poll == "direct",
                          "bidirectional": args.bidirectional, "hardware": hardware, "rtt": rtt,
