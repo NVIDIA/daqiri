@@ -1702,39 +1702,44 @@ Status SocketEngine::socket_connect_to_server(const std::string& dst_addr, uint1
 
   if (conn_id == nullptr) { return Status::INVALID_PARAMETER; }
 
-  for (auto& ep : endpoints_) {
-    if (ep == nullptr || ep->socket_cfg.mode_ != SocketMode::CLIENT) { continue; }
-
-    if (cfg_.common_.protocol == SocketProtocol::TCP) {
-      if (ep->primary_conn_id != 0 && ep->socket_cfg.remote_ip_ == dst_addr &&
-          ep->socket_cfg.remote_port_ == dst_port &&
-          (src_addr.empty() || src_addr == ep->socket_cfg.local_ip_)) {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        const auto it = connections_.find(ep->primary_conn_id);
-        if (it != connections_.end() && it->second != nullptr && it->second->running.load()) {
-          *conn_id = ep->primary_conn_id;
-          return Status::SUCCESS;
-        }
+  EndpointState* endpoint = nullptr;
+  for (auto& candidate : endpoints_) {
+    if (!candidate || candidate->socket_cfg.mode_ != SocketMode::CLIENT) { continue; }
+    if (!endpoint) { endpoint = candidate.get(); }
+    const auto& config = candidate->socket_cfg;
+    if (config.remote_ip_ == dst_addr && config.remote_port_ == dst_port &&
+        (src_addr.empty() || src_addr == config.local_ip_)) {
+      endpoint = candidate.get();
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      const auto it = connections_.find(endpoint->primary_conn_id);
+      if (it != connections_.end() && it->second &&
+          (it->second->is_udp || it->second->running.load())) {
+        *conn_id = endpoint->primary_conn_id;
+        return Status::SUCCESS;
       }
-
-      auto conn = create_tcp_client_connection(*ep, dst_addr, dst_port, src_addr, 0, true);
-      if (conn == nullptr) { return Status::CONNECT_FAILURE; }
-      *conn_id = conn->conn_id;
-      return Status::SUCCESS;
+      break;
     }
+  }
+  if (!endpoint) { return Status::INVALID_PARAMETER; }
 
-    if (cfg_.common_.protocol == SocketProtocol::UDP) {
-      sockaddr_in dst{};
-      if (!parse_ipv4_addr(dst_addr, dst_port, &dst)) { return Status::INVALID_PARAMETER; }
-      if (::connect(ep->udp_fd, reinterpret_cast<sockaddr*>(&dst), sizeof(dst)) != 0) {
-        DAQIRI_LOG_ERROR("UDP connect failed for {}:{}: {}", dst_addr, dst_port, strerror(errno));
-        return Status::CONNECT_FAILURE;
-      }
-      ep->socket_cfg.remote_ip_ = dst_addr;
-      ep->socket_cfg.remote_port_ = dst_port;
-      *conn_id = ep->primary_conn_id;
-      return Status::SUCCESS;
+  if (cfg_.common_.protocol == SocketProtocol::TCP) {
+    auto conn = create_tcp_client_connection(*endpoint, dst_addr, dst_port, src_addr, 0, true);
+    if (!conn) { return Status::CONNECT_FAILURE; }
+    *conn_id = conn->conn_id;
+    return Status::SUCCESS;
+  }
+
+  if (cfg_.common_.protocol == SocketProtocol::UDP) {
+    sockaddr_in dst{};
+    if (!parse_ipv4_addr(dst_addr, dst_port, &dst)) { return Status::INVALID_PARAMETER; }
+    if (::connect(endpoint->udp_fd, reinterpret_cast<sockaddr*>(&dst), sizeof(dst)) != 0) {
+      DAQIRI_LOG_ERROR("UDP connect failed for {}:{}: {}", dst_addr, dst_port, strerror(errno));
+      return Status::CONNECT_FAILURE;
     }
+    endpoint->socket_cfg.remote_ip_ = dst_addr;
+    endpoint->socket_cfg.remote_port_ = dst_port;
+    *conn_id = endpoint->primary_conn_id;
+    return Status::SUCCESS;
   }
 
   return Status::INVALID_PARAMETER;

@@ -104,6 +104,16 @@ install(DIRECTORY scripts/daqiri_config
         DESTINATION ${CMAKE_INSTALL_DATADIR}/${DAQIRI_CONFIG_GENERATOR_DATA_SUBDIR}
         PATTERN "__pycache__" EXCLUDE)
 
+if(DAQIRI_BUILD_EXAMPLES)
+  configure_file(scripts/daqiri_perftest.py ${CMAKE_CURRENT_BINARY_DIR}/daqiri_perftest @ONLY)
+  configure_file(python/tune_system.py ${CMAKE_CURRENT_BINARY_DIR}/tune_system.py COPYONLY)
+  install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/daqiri_perftest DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+if(DAQIRI_BUILD_EXAMPLES OR DAQIRI_BUILD_PYTHON)
+  install(PROGRAMS python/tune_system.py DESTINATION ${CMAKE_INSTALL_BINDIR}
+          COMPONENT daqiri-utils)
+endif()
+
 install(
   EXPORT daqiriTargets
   NAMESPACE daqiri::

@@ -56,6 +56,7 @@ nav:
   - Getting Started: getting-started.md
   - Concepts: concepts.md
   - Benchmarking:
+    - DAQIRI perftest: benchmarks/perftest.md
     - Overview: benchmarks/index.md
     - Socket and RDMA Benchmarking: benchmarks/socket_benchmarking.md
     - Raw Ethernet Benchmarking: benchmarks/raw_benchmarking.md

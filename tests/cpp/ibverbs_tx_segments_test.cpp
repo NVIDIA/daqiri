@@ -216,7 +216,8 @@ class IbverbsEngineTxTestPeer {
     q.send_ring = nullptr;
   }
 
-  static void gathered_send(int segments, bool endpoint, bool direct, bool wait) {
+  static void gathered_send(int segments, bool endpoint, bool direct, bool wait,
+                            bool empty_endpoint_segment = false) {
     IbverbsEngine engine;
     IbvTxQueue q;
     q.port_id = q.queue_id = 0;
@@ -261,7 +262,7 @@ class IbverbsEngineTxTestPeer {
       burst.pkt_lens[s] = lengths[s].data();
       for (size_t packet = 0; packet < burst.hdr.hdr.num_pkts; ++packet) {
         pointers[s][packet] = reinterpret_cast<void*>(0x100000 + s * 4096 + packet * 256);
-        lengths[s][packet] = 42 + s * 7 + packet;
+        lengths[s][packet] = empty_endpoint_segment && s == 1 ? 0 : 42 + s * 7 + packet;
         expected_bytes += lengths[s][packet];
       }
     }
@@ -276,9 +277,12 @@ class IbverbsEngineTxTestPeer {
               "endpoint preparation failed");
     }
 
-    const uint32_t blocks_per_send = endpoint ? (segments == 4 ? 3 : 2) : (segments > 2 ? 2 : 1);
+    const uint32_t reserved = endpoint ? (segments == 4 ? 3 : 2) : (segments > 2 ? 2 : 1);
+    const uint64_t reserved_blocks = reserved * burst.hdr.hdr.num_pkts;
+    const int encoded_segments = segments - (empty_endpoint_segment ? 1 : 0);
+    const uint32_t blocks_per_send = endpoint && encoded_segments < 4 ? 2 : reserved;
     const uint64_t expected_blocks = blocks_per_send * burst.hdr.hdr.num_pkts;
-    require(engine.tx_burst_wqebbs(q, &burst) == expected_blocks, "incorrect SQ reservation");
+    require(engine.tx_burst_wqebbs(q, &burst) == reserved_blocks, "incorrect SQ reservation");
     require(engine.get_burst_tot_byte(&burst) == expected_bytes,
             "segments missing from byte count");
     q.sq_capacity_wqebbs = expected_blocks;
@@ -305,15 +309,16 @@ class IbverbsEngineTxTestPeer {
       }
       const auto* ctrl = reinterpret_cast<const mlx5_wqe_ctrl_seg*>(wqe.data());
       require((be32toh(ctrl->opmod_idx_opcode) & 0xff) == MLX5_OPCODE_SEND, "SEND overwritten");
-      require(
-          (be32toh(ctrl->qpn_ds) & 0x3f) == static_cast<uint32_t>(segments + (endpoint ? 5 : 2)),
-          "incorrect encoded WQE length");
+      require((be32toh(ctrl->qpn_ds) & 0x3f) ==
+                  static_cast<uint32_t>(encoded_segments + (endpoint ? 5 : 2)),
+              "incorrect encoded WQE length");
       const size_t data_offset = endpoint ? 80 : 32;
       const auto* data = reinterpret_cast<const mlx5_wqe_data_seg*>(wqe.data() + data_offset);
-      for (int s = 0; s < segments; ++s) {
-        require(be32toh(data[s].byte_count) == lengths[s][packet], "incorrect segment length");
-        require(be32toh(data[s].lkey) == q.regions[s].lkey, "incorrect segment lkey");
-        require(be64toh(data[s].addr) == reinterpret_cast<uint64_t>(pointers[s][packet]),
+      for (int s = 0, d = 0; s < segments; ++s) {
+        if (empty_endpoint_segment && lengths[s][packet] == 0) continue;
+        require(be32toh(data[d].byte_count) == lengths[s][packet], "incorrect segment length");
+        require(be32toh(data[d].lkey) == q.regions[s].lkey, "incorrect segment lkey");
+        require(be64toh(data[d++].addr) == reinterpret_cast<uint64_t>(pointers[s][packet]),
                 "incorrect segment address/order");
       }
       if (endpoint) {
@@ -799,6 +804,7 @@ int main() {
         }
       }
     }
+    daqiri::IbverbsEngineTxTestPeer::gathered_send(4, true, true, true, true);
     daqiri::IbverbsEngineTxTestPeer::shared_configuration();
     daqiri::IbverbsEngineTxTestPeer::shared_pool();
     for (int segments = 1; segments <= daqiri::MAX_NUM_SEGS; ++segments)

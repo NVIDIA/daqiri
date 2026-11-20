@@ -64,6 +64,7 @@ for tool in ibdev2netdev mlnx_perf ibv_devinfo ibstat mlxconfig ethtool lspci ip
 done
 python3 /opt/daqiri/bin/tune_system.py --help >/dev/null
 gen_daqiri_config.py --help >/dev/null
+daqiri_perftest --help >/dev/null
 pkg-config --exists daqiri
 pkg-config --libs --static daqiri > "$work/pkg-libs"
 if grep -Eq 'rte_|dpdk' "$work/pkg-libs"; then

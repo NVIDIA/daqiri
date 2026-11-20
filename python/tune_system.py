@@ -2297,6 +2297,8 @@ def update_mrrs_for_nvidia_devices():
 def main():
     setup_logging()
     args = parse_args()
+    if args.set is not None and os.geteuid() != 0:
+        sys.exit("Changing system settings requires root. Please use 'sudo'.")
 
     if args.check is not None:
         if args.check == "all" or args.check == "cpu-freq":
@@ -2333,7 +2335,4 @@ def main():
 
 
 if __name__ == "__main__":
-    if os.geteuid() != 0 and not any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
-        sys.exit("This script must be run as root! Please use 'sudo' to execute it.")
-
     main()
