@@ -34,7 +34,7 @@ sudo daqiri_perftest bw --transport raw --engine ibverbs --topology hw-loopback 
 - `--packet-size` and comma-separated `--packet-sizes` select raw Ethernet L2 frame bytes excluding FCS. `--message-size` and `--message-sizes` select application message bytes. Use one size selector per run. The original `--size` and `--sizes` keep their transport-dependent units.
 - `--queues` assigns one steering flow per raw queue, one RC connection per RoCE queue pair, or one endpoint per TCP/UDP queue pair. Socket ports increment for each queue and each sweep size.
 - Repeat `--tx-mr` and `--rx-mr` as `kind:buffer_bytes:buffer_count[:affinity]` to define ordered raw packet segments or a single socket/RoCE region. Each queue has its own region configuration. For TCP/UDP, the region sizes limit payload capacity and RX backlog. Default storage is huge for DPDK, host-pinned for ibverbs/RoCE, and host for TCP/UDP.
-- `--batch-size` sets the indirect burst size. Direct polling is supported by raw ibverbs and RoCE and submits one packet or operation at a time. Select each side with `--tx-poll` and `--rx-poll`. Use `--master-core`, `--app-cores`, `--tx-cores`, and `--rx-cores` to control placement. A local run lists server queues before client queues. A single CPU value applies to all queues. For bidirectional TCP bandwidth, `--rx-app-cores` controls the application reader threads.
+- Raw ibverbs and RoCE latency default to direct TX and RX polling, which submits one packet or operation at a time. Bandwidth, DPDK, TCP, and UDP default to indirect polling. Override either direction with `--tx-poll` or `--rx-poll`. Use `--batch-size` for indirect bursts and `--tx-cores` or `--rx-cores` for indirect pollers. Set `--master-core` and `--app-cores` for application placement. A local run lists server queues before client queues. A single CPU value applies to all queues. For bidirectional TCP bandwidth, `--rx-app-cores` controls the application reader threads.
 - Automatic placement uses allowed isolated CPUs for application and polling threads first and prefers an ordinary CPU for the master. Perftest warns if it finds too few isolated CPUs for the requested layout or none at all. Explicit CPU options take precedence. Paired processes on the same host warn if their benchmark CPU assignments overlap.
 - In latency mode, `--realtime-priority 80` runs the application threads with `SCHED_FIFO` and verifies the requested priority before starting probes. It requires `CAP_SYS_NICE` or a sufficient `RLIMIT_RTPRIO`. With direct polling these threads also poll the hardware queues.
 - Bandwidth defaults to 2 seconds of warmup and 10 seconds of measurement. Use `--warmup-seconds` and `--seconds` to change them. Latency defaults to 1,000 warmup probes and 10,000 measured probes per queue and direction. Use `--warmup-samples` and `--samples` to change them.
@@ -47,9 +47,14 @@ payload in TX regions. RX regions and DPDK TX regions hold the payload plus the
 42-byte Ethernet/IPv4/UDP header and any Ethernet padding. Use a message size
 that fits the path MTU.
 
+DAQIRI zeroes device TX regions during setup. Perftest leaves GPU payloads opaque.
+If raw ibverbs TX places the header in device storage, perftest uses the named
+sender to supply it and uses TX regions for payload. Packet sizes still count
+full frames. Raw DPDK requires the first 42 TX bytes to be CPU-accessible.
+
 ```bash
 sudo daqiri_perftest lat --transport raw --engine ibverbs --topology hw-loopback \
-  --interface eth1 --message-size 1024 --tx-poll direct --rx-poll direct
+  --interface eth1 --message-size 1024
 ```
 
 ## Interpret the result
@@ -60,7 +65,7 @@ Bandwidth displays submission and reception per direction and queue, with receiv
 
 Same-host software latency starts immediately before TX submission and ends when the application receives the matching packet or complete TCP message. Where available, hardware latency on the same probe is RX hardware timestamp minus TX CQE timestamp. A TX completion can follow RX, so the difference is signed. Both distributions include min, median, p95, p99, and max. Two-host measurements use full application ping-pong RTT. Paired same-host runs also use RTT for the software interval if the CPU clock domains cannot be verified.
 
-For a raw ibverbs echo with two processes, pass `--hardware-rtt` on both roles with `--topology same-host` or `--topology two-host`. The initiator reports `reply_rx_hw_minus_request_tx_cqe` alongside `application_rtt` for the same probes. The hardware interval uses the initiator's NIC clock for both timestamps and includes the responder's application turnaround. With direct polling and device memory, the responder prepares the reply before the probe starts and validates the request ID after the initiator records the reply. A mismatched request invalidates the case. With `--bidirectional`, each role initiates its own phase.
+For a raw ibverbs echo with two processes, pass `--hardware-rtt` on both roles with `--topology same-host` or `--topology two-host`. The initiator reports `reply_rx_hw_minus_request_tx_cqe` alongside `application_rtt` for the same probes. The hardware interval uses the initiator's NIC clock for both timestamps and includes the responder's application turnaround. With direct polling, the responder prepares each reply before signaling readiness. Host-only runs validate the payload token after posting the reply. Device-memory runs use the dedicated receive queue, frame or message length, and raw flow ID where available to match one probe at a time. A timeout invalidates an opaque-payload case so a late reply cannot be counted toward a later probe. With `--bidirectional`, each role initiates its own phase.
 
 Check the active `REAL_TIME_CLOCK_ENABLE` values and PTP clock alignment for hardware comparison. Raw ibverbs hardware latency uses the same packed wall-clock CQE format for TX and RX. Perftest submits the TX packets immediately. For distinct PHCs, observed clock skew plus sampling uncertainty must be at most 1 µs before and after the case. Perftest prefers Linux kernel cross-timestamps and records the sampling method in the JSON preflight. If the settings, clock comparison, or timestamp APIs prevent hardware measurement, the launcher reports the reason and uses CPU timing. The CPU result includes application TX and RX processing. See the [firmware and PTP setup guide](../tutorials/system_configuration.md#enable-accurate-tx-scheduling-packet-pacing-and-hardware-rx-timestamps).
 

@@ -1818,7 +1818,7 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_reorder_config(
 bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
     const YAML::Node& mr, daqiri::MemoryRegionConfig& tmr) {
   if (!daqiri::detail::validate_yaml_mapping_keys(
-          mr, {"name", "kind", "affinity", "access", "num_bufs", "buf_size", "owned"},
+          mr, {"name", "kind", "affinity", "access", "num_bufs", "buf_size", "owned", "zero_init"},
           "memory region")) {
     return false;
   }
@@ -1838,6 +1838,15 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
     if (tmr.kind_ == daqiri::MemoryKind::INVALID) {
       DAQIRI_LOG_ERROR(
           "Invalid memory-region kind; valid values are huge, device, host_pinned, host, and null");
+      return false;
+    }
+    bool zero_init = false;
+    if (!daqiri::detail::parse_optional_yaml_scalar(mr, "zero_init", false, zero_init,
+                                                    "memory region")) {
+      return false;
+    }
+    if (zero_init && tmr.kind_ != daqiri::MemoryKind::DEVICE) {
+      DAQIRI_LOG_ERROR("Memory-region zero_init requires device memory");
       return false;
     }
     if (tmr.kind_ == daqiri::MemoryKind::NULL_MR) {
@@ -1901,6 +1910,13 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
     if (!daqiri::detail::parse_optional_yaml_scalar(mr, "owned", true, tmr.owned_,
                                                     "memory region")) {
       return false;
+    }
+    if (zero_init) {
+      if (!tmr.owned_) {
+        DAQIRI_LOG_ERROR("Memory-region zero_init requires DAQIRI-owned storage");
+        return false;
+      }
+      tmr.access_ |= daqiri::MEM_INIT_ZERO;
     }
   } catch (const std::exception& e) {
     DAQIRI_LOG_ERROR("Error parsing MemoryRegionConfig: {}", e.what());

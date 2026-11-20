@@ -210,7 +210,7 @@ install(TARGETS daqiri_example_rdma_read_write RUNTIME DESTINATION bin)
 
 add_executable(daqiri_perftest_worker perftest/worker.cpp)
 link_daqiri_bench(daqiri_perftest_worker)
-target_link_libraries(daqiri_perftest_worker PRIVATE CUDA::cudart Threads::Threads)
+target_link_libraries(daqiri_perftest_worker PRIVATE Threads::Threads)
 set_target_properties(daqiri_perftest_worker PROPERTIES
   BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
   INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")

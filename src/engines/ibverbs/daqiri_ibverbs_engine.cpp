@@ -6880,6 +6880,10 @@ Status IbverbsEngine::add_tx_queue_async(int port, const TxQueueConfig& config,
 
 Status IbverbsEngine::allocate_runtime_mr(MemoryRegionConfig config,
                                           const ExternalMemoryRegion* binding) {
+  if ((config.access_ & MEM_INIT_ZERO) &&
+      (config.kind_ != MemoryKind::DEVICE || !config.owned_ || binding != nullptr)) {
+    return Status::INVALID_PARAMETER;
+  }
   if (!config.name_.empty() && config.kind_ == MemoryKind::NULL_MR) {
     if (binding != nullptr || config.buf_size_ > UINT32_MAX) return Status::INVALID_PARAMETER;
     config.num_bufs_ = config.adj_size_ = config.ttl_size_ = 0;
@@ -7044,6 +7048,15 @@ Status IbverbsEngine::allocate_runtime_mr(MemoryRegionConfig config,
           cuMemFree(device_ptr);
           cuCtxSetCurrent(previous);
           return Status::GENERIC_FAILURE;
+        }
+        if (config.access_ & MEM_INIT_ZERO) {
+          if (cuMemsetD8(device_ptr, 0, config.ttl_size_) != CUDA_SUCCESS ||
+              cuCtxSynchronize() != CUDA_SUCCESS) {
+            DAQIRI_LOG_ERROR("Could not zero device memory region '{}'", config.name_);
+            cuMemFree(device_ptr);
+            cuCtxSetCurrent(previous);
+            return Status::GENERIC_FAILURE;
+          }
         }
         ptr = reinterpret_cast<void*>(device_ptr);
         allocation.cuda_device_ = config.affinity_;

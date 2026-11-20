@@ -510,6 +510,11 @@ Status Engine::set_external_memory_regions(const NetworkConfig& cfg,
       DAQIRI_LOG_ERROR("Null memory region '{}' cannot have an external binding", name);
       return Status::INVALID_PARAMETER;
     }
+    if (mr_it->second.access_ & MEM_INIT_ZERO) {
+      DAQIRI_LOG_ERROR("Memory region '{}' uses zero_init and cannot have an external binding",
+                       name);
+      return Status::INVALID_PARAMETER;
+    }
     if (binding.data == nullptr || binding.capacity == 0) {
       DAQIRI_LOG_ERROR("External memory binding '{}' has a null pointer or zero capacity", name);
       return Status::INVALID_PARAMETER;
@@ -880,6 +885,11 @@ Status Engine::allocate_memory_regions() {
   // overflow, this lets raw ibverbs aggregate many small HUGE regions into the
   // minimum number of hugetlb mappings.
   for (auto& [name, mr] : cfg_.mrs_) {
+    if ((mr.access_ & MEM_INIT_ZERO) && (mr.kind_ != MemoryKind::DEVICE || !mr.owned_)) {
+      DAQIRI_LOG_ERROR("Memory region '{}' uses zero_init without DAQIRI-owned device storage",
+                       name);
+      return Status::INVALID_PARAMETER;
+    }
     if (mr.kind_ == MemoryKind::NULL_MR) {
       mr.num_bufs_ = mr.adj_size_ = mr.ttl_size_ = 0;
       mr.affinity_ = 0;
@@ -1116,6 +1126,14 @@ Status Engine::allocate_memory_regions() {
             cuMemFree(cuptr);
             restore_previous();
             return Status::NULL_PTR;
+          }
+          if (mr.second.access_ & MEM_INIT_ZERO) {
+            if (cuMemsetD8(cuptr, 0, align) != CUDA_SUCCESS || cuCtxSynchronize() != CUDA_SUCCESS) {
+              DAQIRI_LOG_ERROR("Could not zero device memory region '{}'", mr.first);
+              cuMemFree(cuptr);
+              restore_previous();
+              return Status::GENERIC_FAILURE;
+            }
           }
           ar.cuda_device_ = mr.second.affinity_;
           ar.deallocator_ = AllocRegion::Deallocator::CUDA_DEVICE;
