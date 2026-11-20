@@ -7,12 +7,14 @@
 # Review the base, package installs and CMake flags below for what is shipped.
 # The source-collection helper only produces inventories, sources and notices.
 # This manifest pins both linux/amd64 and linux/arm64. Update it deliberately.
-FROM nvcr.io/nvidia/pytorch:26.01-py3@sha256:38ed2ecb2c16d10677006d73fb0a150855d6ec81db8fc66e800b5ae92741007e AS release-base
+FROM nvcr.io/nvidia/pytorch:26.10-py3@sha256:6d347d649d5dd108b4652f1b9cea6a3c859692ac408617a9108616da40e3da1f AS release-base
 SHELL ["/bin/bash", "-eou", "pipefail", "-c"]
 RUN mkdir -p /opt/daqiri-release \
-    && printf '%s\n' "nvcr.io/nvidia/pytorch:26.01-py3@sha256:38ed2ecb2c16d10677006d73fb0a150855d6ec81db8fc66e800b5ae92741007e" > /opt/daqiri-release/base-image.txt \
+    && printf '%s\n' "nvcr.io/nvidia/pytorch:26.10-py3@sha256:6d347d649d5dd108b4652f1b9cea6a3c859692ac408617a9108616da40e3da1f" > /opt/daqiri-release/base-image.txt \
     && dpkg-query -W -f='${binary:Package}\t${Version}\t${source:Package}\t${source:Version}\n' \
-       > /opt/daqiri-release/base-packages.tsv
+       > /opt/daqiri-release/base-packages.tsv \
+    && python3 -c 'import importlib.metadata as m,json; print(json.dumps({d.metadata["Name"].lower().replace("_", "-"): d.version for d in m.distributions()}))' \
+       > /opt/daqiri-release/base-python-packages.json
 
 FROM release-base AS release-deps
 ARG TARGETARCH
@@ -27,7 +29,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
     OFED_SOURCE_VERSION=25.10-1.7.1.0 \
     OFED_SOURCE_SHA256=56f173e1d538a23765d639dd382abc2f5caa0facaef2f30d4575fb2d375ae16a
 
-RUN apt-get update \
+# CVE-2026-109518: fixed in apt 2.8.4ubuntu0.1.
+# Disabling retries blocks the exploit while installing the fixed APT packages.
+RUN apt-get update -o Acquire::Retries=0 -o APT::Update::Error-Mode=any \
+    && apt-get install -y --only-upgrade --no-install-recommends -o Acquire::Retries=0 \
+         apt=2.8.4* \
+         apt-utils=2.8.4* \
+         libapt-pkg6.0t64=2.8.4* \
+    && apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
     && case "${TARGETARCH}" in \
          amd64) doca_arch=x86_64 ;; \
@@ -52,6 +61,52 @@ RUN apt-get update \
          python3-dev python3-pip python3-yaml pybind11-dev \
          pciutils ethtool iproute2 iputils-ping procps kmod \
     && rm -rf /var/lib/apt/lists/*
+
+# Upgrade Nsight Systems CLI to remediate embedded Go CVEs.
+ENV NSIGHT_SYSTEMS_VERSION=2026.6.1.218
+RUN case "${TARGETARCH}" in \
+      arm64) package=nsight-systems-cli-2026.6.1_2026.6.1.218-1_arm64.deb; \
+        checksum=717815ac50b957b56fed9f4d78781cc5bb420b94fdf315ef82a82b3c6e8899e0 ;; \
+      amd64) package=nsightsystems-linux-cli-public-2026.6.1.218-39266636.deb; \
+        checksum=e71440978244e3883fc769da91a44a03451129ce21988d0db656a6bf7c1cb56b ;; \
+      *) exit 1 ;; \
+    esac \
+    && curl -fsSL "https://developer.nvidia.com/downloads/assets/tools/secure/nsight-systems/2026_6/${package}" -o /tmp/nsight.deb \
+    && printf '%s  /tmp/nsight.deb\n' "$checksum" | sha256sum -c - \
+    && apt-get update \
+    && apt-get remove -y nsight-systems-cli-2026.5.1 \
+    && rm -rf /usr/local/cuda-13.4/NsightSystems-cli-2026.5.1 \
+    && apt-get install -y --no-install-recommends /tmp/nsight.deb \
+    && ln -sf /usr/local/bin/nsys /usr/local/cuda/bin/nsys \
+    && /usr/local/bin/nsys --version \
+    && test ! -e /usr/local/cuda-13.4/NsightSystems-cli-2026.5.1 \
+    && rm -f /tmp/nsight.deb \
+    && rm -rf /var/lib/apt/lists/*
+
+# PyTorch 26.10 already carries newer versions of the previously upgraded
+# notebook, networking, and packaging dependencies. Preserve its pinned stack.
+# GHSA-27vj-qcqg-25rc: fixed in fsspec 2026.6.0.
+# ONNX 1.23.2 retains the earlier ONNX security updates.
+# Remove unused training tools: datasets caps fsspec; torchtitan needs datasets.
+# W&B is unused by DAQIRI and bundles the vulnerable Go wandb-core executable.
+# The base image's constraints pin older versions, so override them only here.
+# Repair inherited 26.10 dependency inconsistencies: triton-kernels needs pytest,
+# cupti-python needs the matching CUPTI wheel, and the bundled FlashAttention 4
+# and QuACK releases pin mutually incompatible older CUTLASS DSL versions.
+RUN python3 -m pip uninstall -y \
+      datasets \
+      torchtitan \
+      wandb \
+    && PIP_CONSTRAINT=/dev/null python3 -m pip install --no-cache-dir --no-deps \
+      'fsspec==2026.6.0' \
+      'onnx==1.23.2' \
+      'pytest==8.4.2' \
+      'iniconfig==2.1.0' \
+      'pluggy==1.6.0' \
+      'nvidia-cuda-cupti==13.4.92' \
+      'quack-kernels==0.6.5' \
+      'flash-attn-4==4.0.0b39' \
+    && python3 -m pip check
 
 # Prefer Ubuntu CMake 3.x over a pip CMake inherited from PyTorch.
 ENV PATH=/opt/daqiri/bin:/usr/local/cuda/bin:/usr/bin:/usr/sbin:/bin:/sbin:/usr/local/bin:/usr/local/sbin
