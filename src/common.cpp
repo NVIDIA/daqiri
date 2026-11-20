@@ -1289,6 +1289,27 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flow_config(
     return false;
   }
 
+  // eCPRI, flex-item, and UDP/IP criteria select mutually exclusive match classes; only
+  // Ethernet addresses may qualify another class. Reject combinations instead of dropping
+  // the criteria of the class that is not selected below.
+  if (match.IsDefined()) {
+    const bool has_ip_udp = match["udp_src"].IsDefined() || match["udp_dst"].IsDefined() ||
+                            match["ipv4_len"].IsDefined() || match["ipv4_src"].IsDefined() ||
+                            match["ipv4_dst"].IsDefined();
+    const bool has_flex_item =
+        match["flex_item_id"].IsDefined() || match["val"].IsDefined() || match["mask"].IsDefined();
+    if (match["ecpri"].IsDefined() && (has_ip_udp || has_flex_item)) {
+      DAQIRI_LOG_ERROR("Flow '{}' cannot combine eCPRI matching with UDP/IP or flex-item criteria",
+                       flow.name_);
+      return false;
+    }
+    if (has_flex_item && has_ip_udp) {
+      DAQIRI_LOG_ERROR("Flow '{}' cannot combine flex-item matching with UDP/IP criteria",
+                       flow.name_);
+      return false;
+    }
+  }
+
   const YAML::Node ecpri_node = match.IsDefined() ? match["ecpri"] : YAML::Node{};
   const YAML::Node ethernet_node = match.IsDefined() ? match["ethernet"] : YAML::Node{};
   if (match.IsDefined() && ethernet_node.IsDefined()) {
