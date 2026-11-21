@@ -16,11 +16,28 @@ ln -s /usr/local/cuda/lib64/stubs/libcuda.so "$work/stubs/libcuda.so.1"
 export LD_LIBRARY_PATH="$work/stubs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 python3 - <<'PY'
 import daqiri
+from pathlib import Path
+import re
+import subprocess
+
 import torch
 import yaml
 assert torch.ones(2).sum().item() == 2
 print("PyTorch:", torch.__version__)
-assert daqiri.__abi_version__ == 2
+header = Path('/opt/daqiri/include/daqiri/version.h').read_text()
+match = re.search(r'^#define DAQIRI_ABI_VERSION ([0-9]+)$', header, re.MULTILINE)
+assert match, 'Installed header is missing DAQIRI_ABI_VERSION'
+expected_abi = int(match.group(1))
+assert daqiri.__abi_version__ == expected_abi, 'Python ABI metadata mismatch'
+assert daqiri.DAQIRI_ABI_VERSION == expected_abi, 'Python ABI constant mismatch'
+assert daqiri.abi_version() == expected_abi, 'Python ABI helper mismatch'
+dynamic = subprocess.check_output(
+    ['readelf', '-d', '/opt/daqiri/lib/libdaqiri.so'], text=True
+)
+soname = re.search(r'\(SONAME\).*\[([^\]]+)\]', dynamic)
+assert soname, 'DAQIRI library is missing its SONAME'
+assert soname.group(1) == f'libdaqiri.so.{expected_abi}', 'DAQIRI SONAME mismatch'
+print('DAQIRI ABI:', expected_abi, 'SONAME:', soname.group(1))
 assert daqiri.__version__
 assert hasattr(daqiri, 'send_tx_burst')
 print('DAQIRI Python:', daqiri.__version__)
