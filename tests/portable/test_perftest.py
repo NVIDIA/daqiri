@@ -76,6 +76,27 @@ def test_polling_defaults_and_overrides(frontend, monkeypatch, command, tx_direc
                 assert (queue.get("poll_mode") == "direct") is direct
 
 
+@pytest.mark.parametrize(("test", "flags", "depth"), [
+    ("bw", [], 1024),
+    ("bw", ["--rx-mr", "host_pinned:64:512"], 512),
+    ("bw", ["--rx-depth", "128"], 128),
+    ("bw", ["--queues", "2"], 1019),
+    ("bw", ["--role", "server", "--queues", "2", "--bidirectional"], 1019),
+    ("bw", ["--queues", "2", "--bidirectional", "--tx-poll", "direct"], 383),
+    ("lat", [], 1),
+])
+def test_roce_receive_depth(frontend, monkeypatch, test, flags, depth):
+    topology = importlib.import_module("daqiri_config.perftest")
+    monkeypatch.setattr(topology, "socket_interfaces", lambda *_: {})
+    monkeypatch.setattr(topology, "run_ip", lambda *_: [{}])
+    args = frontend.parse_args([test, "--transport", "roce", "--topology", "same-host",
+                               "--client-address", "192.0.2.1", "--server-address", "192.0.2.2",
+                               "--size", "64", *flags])
+    frontend.resolve(args)
+    config = frontend.build_config(args, 0, hardware=False, rtt=False)
+    assert config["perftest"]["rx_depth"] == depth
+
+
 def test_rejects_ambiguous_bdf_without_netdev(frontend, tmp_path):
     topology = importlib.import_module("daqiri_config.perftest")
     for name in ("p1", "p2"):

@@ -22,6 +22,10 @@ MAC = re.compile(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}")
 BDF = re.compile(r"(?:[0-9a-fA-F]{4}:)?[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]")
 MEMORY_KINDS = ("host", "host_pinned", "device", "huge")
 MIN_ETHERNET_FRAME_SIZE = 60  # L2 bytes excluding FCS.
+ROCE_MAX_WR = 1024
+# A single receive occupies one of the engine's shared TX burst slots.
+# Keep this capacity in sync with RdmaEngine::setup_pools_and_rings().
+ROCE_BURST_SLOTS = 2047
 
 
 @dataclass(frozen=True)
@@ -332,11 +336,22 @@ def resolve(args) -> list[str]:
     if args.transport == "udp" and args.batch_size > 32:
         raise ConfigError("UDP supports batch sizes up to 32")
     args.tx_depth = args.tx_depth or 128
-    args.rx_depth = args.rx_depth or 128
-    if args.roce and max(args.tx_depth, args.rx_depth, args.batch_size) > 1024:
+    if args.roce and max(args.tx_depth, args.rx_depth or 0, args.batch_size) > ROCE_MAX_WR:
         raise ConfigError("RoCE queue depths and batch size must not exceed 1024")
     if args.roce and args.tx_poll == "indirect" and args.batch_size > args.tx_depth:
         raise ConfigError("RoCE batch size exceeds TX depth")
+    if args.roce and args.test == "bw":
+        rx_lanes = args.queues * sum(role == "server" or args.bidirectional for role in args.roles)
+        tx_lanes = args.queues * sum(role == "client" or args.bidirectional for role in args.roles)
+        tx_batch = 1 if args.tx_poll == "direct" else args.batch_size
+        tx_slots = tx_lanes * (args.tx_depth // tx_batch)
+        rx_limit = min(ROCE_MAX_WR, (ROCE_BURST_SLOTS - tx_slots) // rx_lanes) if rx_lanes else ROCE_MAX_WR
+        if rx_limit < 1 or (args.rx_depth and args.rx_depth > rx_limit):
+            raise ConfigError("RoCE receive depth exceeds the shared burst pool budget "
+                              f"({max(0, rx_limit)} receives per queue with this layout)")
+        args.rx_depth = args.rx_depth or min([rx_limit] + [r.num_bufs for r in args.rx_mr or ()])
+    else:
+        args.rx_depth = args.rx_depth or 1
 
     default_kind = ("huge" if args.engine == "dpdk" else
                     "host_pinned" if (args.raw or args.roce) else "host")

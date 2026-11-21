@@ -216,7 +216,9 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
         params.sends_since_signal + 1 >= static_cast<uint64_t>(params.send_signal_every) ||
         state.sends_posted - state.sends_completed >= 15;
     state.send.send_flags = signal ? IBV_SEND_SIGNALED : 0;
-    if (params.client_id->qp->qp_type == IBV_QPT_RC) {
+    const uint64_t time = rdma_tx_time(burst, 0);
+    if (type == IBV_QPT_RC &&
+        (one_sided || params.accurate_send || state.last_read_id > state.sends_completed)) {
       state.send.send_flags |= IBV_SEND_FENCE;
     }
     if (opcode == RDMAOpCode::SEND &&
@@ -224,7 +226,6 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
       state.send.send_flags |= IBV_SEND_INLINE;
     }
     ibv_send_wr* bad = nullptr;
-    const uint64_t time = rdma_tx_time(burst, 0);
     const int status = time ? verbs_->post_timed_send(params.client_id->qp, &state.send, time)
                             : verbs_->post_send(params.client_id->qp, &state.send, &bad);
     if (status) {
@@ -237,6 +238,7 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
       rdma_burst_cache(burst).tx_timestamp_submitted = true;
     }
     state.sends_posted = tag;
+    if (opcode == RDMAOpCode::RDMA_READ) state.last_read_id = tag;
     params.sends_since_signal = signal ? 0 : params.sends_since_signal + 1;
     if (state.send.send_flags & IBV_SEND_INLINE) {
       // This connection has one writer; atomic publication is only for stats readers.

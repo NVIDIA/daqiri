@@ -67,6 +67,48 @@ int prepare_uc_qp(rdma_cm_id* id) {
   return 0;
 }
 
+static ibv_qp_init_attr_ex send_qp_attributes(ibv_pd* pd, const ibv_qp_init_attr& attr) {
+  ibv_qp_init_attr_ex extended{};
+  extended.qp_context = attr.qp_context;
+  extended.send_cq = attr.send_cq;
+  extended.recv_cq = attr.recv_cq;
+  extended.srq = attr.srq;
+  extended.cap = attr.cap;
+  extended.qp_type = attr.qp_type;
+  extended.sq_sig_all = attr.sq_sig_all;
+  extended.pd = pd;
+  extended.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS;
+  extended.send_ops_flags = IBV_QP_EX_WITH_SEND;
+  if (attr.qp_type == IBV_QPT_RC) extended.send_ops_flags |= IBV_QP_EX_WITH_RDMA_READ;
+  if (attr.qp_type == IBV_QPT_RC || attr.qp_type == IBV_QPT_UC)
+    extended.send_ops_flags |= IBV_QP_EX_WITH_RDMA_WRITE | IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM;
+  return extended;
+}
+
+int create_send_batch_qp(rdma_cm_id* id, ibv_pd* pd, ibv_qp_init_attr* attr) {
+  auto extended = send_qp_attributes(pd, *attr);
+  const int result = rdma_create_qp_ex(id, &extended);
+  if (!result) attr->cap = extended.cap;
+  return result;
+}
+
+int post_send_batch(ibv_qp* qp, const ibv_send_wr* first) {
+  auto* extended = ibv_qp_to_qp_ex(qp);
+  if (!extended) return EOPNOTSUPP;
+
+  // A failed transaction posts zero WQEs. It is safe to signal just the last
+  // SEND because a successfully posted batch always includes that SEND.
+  ibv_wr_start(extended);
+  for (auto* wr = first; wr; wr = wr->next) {
+    extended->wr_id = wr->wr_id;
+    extended->wr_flags = wr->send_flags;
+    ibv_wr_send(extended);
+    const auto& sge = *wr->sg_list;
+    ibv_wr_set_sge(extended, sge.lkey, sge.addr, sge.length);
+  }
+  return ibv_wr_complete(extended);
+}
+
 int create_timed_qp(rdma_cm_id* id, ibv_pd* pd, ibv_qp_init_attr* attr) {
   // Keep ordinary RDMA independent of mlx5 hardware; this path is opt-in and
   // must never silently fall back to immediate transmission.
@@ -94,23 +136,7 @@ int create_timed_qp(rdma_cm_id* id, ibv_pd* pd, ibv_qp_init_attr* attr) {
     return -1;
   }
 
-  ibv_qp_init_attr_ex extended{};
-  extended.qp_context = attr->qp_context;
-  extended.send_cq = attr->send_cq;
-  extended.recv_cq = attr->recv_cq;
-  extended.srq = attr->srq;
-  extended.cap = attr->cap;
-  extended.qp_type = attr->qp_type;
-  extended.sq_sig_all = attr->sq_sig_all;
-  extended.pd = pd;
-  extended.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS;
-  extended.send_ops_flags = IBV_QP_EX_WITH_SEND;
-  if (attr->qp_type == IBV_QPT_RC) {
-    extended.send_ops_flags |= IBV_QP_EX_WITH_RDMA_READ;
-  }
-  if (attr->qp_type == IBV_QPT_RC || attr->qp_type == IBV_QPT_UC) {
-    extended.send_ops_flags |= IBV_QP_EX_WITH_RDMA_WRITE | IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM;
-  }
+  auto extended = send_qp_attributes(pd, *attr);
   mlx5dv_qp_init_attr dv{};
   dv.comp_mask = MLX5DV_QP_INIT_ATTR_MASK_SEND_OPS_FLAGS;
   dv.send_ops_flags = MLX5DV_QP_EX_WITH_RAW_WQE;

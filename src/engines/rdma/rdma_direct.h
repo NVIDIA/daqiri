@@ -49,6 +49,7 @@ struct RdmaDirectState {
   std::array<Request, kRequests> receives{};
   uint64_t sends_posted = 0;
   uint64_t sends_completed = 0;
+  uint64_t last_read_id = 0;
   uint64_t receives_posted = 0;
   uint32_t receive_count = 0;
   bool poll_tx_first = false;

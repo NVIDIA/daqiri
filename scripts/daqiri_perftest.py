@@ -127,7 +127,10 @@ def parse_args(argv: list[str] | None = None):
         parser.add_argument(f"--{direction}-cores", type=lambda s: [integer(v) for v in s.split(",")])
         parser.add_argument(f"--{direction}-poll", choices=("direct", "indirect"),
                             help="defaults to direct for raw ibverbs and RoCE latency, indirect otherwise")
-        parser.add_argument(f"--{direction}-depth", type=positive, help="RoCE work-request depth")
+        depth_help = ("RoCE receive work-request depth for bandwidth, defaults to up to 1024 "
+                      "per queue based on RX buffers and the shared burst pool" if direction == "rx" else
+                      "RoCE send work-request depth, defaults to 128")
+        parser.add_argument(f"--{direction}-depth", type=positive, help=depth_help)
     sizes = parser.add_mutually_exclusive_group()
     sizes.add_argument("--size", type=positive, help="raw frame bytes or transport message bytes")
     sizes.add_argument("--sizes", type=lambda s: [positive(v) for v in s.split(",")],

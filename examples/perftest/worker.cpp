@@ -289,14 +289,23 @@ class Lane {
     }
     const auto deadline = now_ns() + cfg_.timeout;
     do {
-      auto status =
-          server ? daqiri::socket_get_server_conn_id(cfg_.server_ip, server_port_, &connection_)
-                 : daqiri::socket_connect_to_server(cfg_.server_ip, server_port_, cfg_.client_ip,
-                                                    &connection_);
+      Status status;
+      if (cfg_.roce) {
+        status = server
+                     ? daqiri::rdma_get_server_conn_id(cfg_.server_ip, server_port_, &connection_)
+                     : daqiri::rdma_connect_to_server(cfg_.server_ip, server_port_, cfg_.client_ip,
+                                                      &connection_);
+      } else {
+        status = server
+                     ? daqiri::socket_get_server_conn_id(cfg_.server_ip, server_port_, &connection_)
+                     : daqiri::socket_connect_to_server(cfg_.server_ip, server_port_,
+                                                        cfg_.client_ip, &connection_);
+      }
       if (status == Status::SUCCESS) {
         uint16_t port_id = 0, queue_id = 0;
-        check(daqiri::socket_get_port_queue(connection_, &port_id, &queue_id),
-              "resolve connection");
+        status = cfg_.roce ? daqiri::rdma_get_port_queue(connection_, &port_id, &queue_id)
+                           : daqiri::socket_get_port_queue(connection_, &port_id, &queue_id);
+        check(status, "resolve connection");
         if (queue_id != qid_ || (!cfg_.roce && (port < 0 || port_id != port))) {
           throw std::runtime_error("connection resolved to an unexpected interface or queue");
         }
@@ -365,19 +374,29 @@ class Lane {
     auto burst = poll(false, nullptr);
     if (!burst) return false;
     if (completion_is_send(burst.get())) return true;
-    if (!receive) return true;
-    for (int i = 0; i < packet_count(burst.get()); ++i) {
-      const auto length = daqiri::get_packet_length(burst.get(), i);
-      if (cfg_.tcp) {
-        counts.bytes += length;
-      } else if (matches_frame_length(length)) {
-        counts.bytes += cfg_.application_bytes();
-        ++counts.packets;
-      } else {
-        ++counts.errors;
+    if (receive) {
+      for (int i = 0; i < packet_count(burst.get()); ++i) {
+        const auto length = daqiri::get_packet_length(burst.get(), i);
+        if (cfg_.tcp) {
+          counts.bytes += length;
+        } else if (matches_frame_length(length)) {
+          counts.bytes += cfg_.application_bytes();
+          ++counts.packets;
+        } else {
+          ++counts.errors;
+        }
       }
+      if (cfg_.tcp) counts.packets = counts.bytes / cfg_.bytes;
     }
-    if (cfg_.tcp) counts.packets = counts.bytes / cfg_.bytes;
+    if (cfg_.roce) {
+      // A completed single receive still owns its registered buffer. Post it again as
+      // soon as it has been counted, including during the phase's unmeasured drain.
+      if (daqiri::rdma_get_opcode(burst.get()) != RDMAOpCode::RECEIVE)
+        throw std::runtime_error("bandwidth expected a RoCE SEND receive completion");
+      check(daqiri::set_packet_lengths(burst.get(), 0, {cfg_.bytes}),
+            "restore RoCE receive length");
+      if (post_burst(burst.release(), 1, true, nullptr, nullptr, &counts.errors)) ++rx_posted_;
+    }
     return true;
   }
 
@@ -654,8 +673,7 @@ class Lane {
       return true;
     }
     if (status == Status::NO_SPACE_AVAILABLE) {
-      // Fully direct RoCE retains ownership when the SQ is out of credits.
-      if (cfg_.roce && cfg_.tx_direct && cfg_.rx_direct) free_unsent(burst);
+      if (cfg_.roce && (receive ? cfg_.rx_direct : cfg_.tx_direct)) free_unsent(burst);
       if (id && *id) {
         daqiri::release_tx_timestamp(*id);
         *id = daqiri::INVALID_TX_TIMESTAMP_ID;
@@ -663,7 +681,9 @@ class Lane {
       if (errors) ++*errors;
       return false;
     }
-    if (cfg_.raw || (cfg_.roce && (receive ? cfg_.rx_direct : cfg_.tx_direct))) free_unsent(burst);
+    if (cfg_.raw ||
+        (cfg_.roce && (status == Status::NOT_READY || (receive ? cfg_.rx_direct : cfg_.tx_direct))))
+      free_unsent(burst);
     check(status, sender_id_ ? "submit burst through named sender" : "submit burst");
     return false;
   }
@@ -827,10 +847,12 @@ class Bandwidth {
       if (rx || cfg_.roce) active = lane.poll_bandwidth(result.rx, rx);
       if (rx) lane.refill();
       if (tx) active = lane.send_bandwidth(result.tx) || active;
-      if (!active) std::this_thread::yield();
+      if (!active && !cfg_.roce) std::this_thread::yield();
     }
     while (!stopping_ && (rx || cfg_.roce) && now_ns() < end + ns(kDrainTime)) {
-      if (!lane.poll_bandwidth(result.rx_drain, rx)) std::this_thread::yield();
+      const bool active = lane.poll_bandwidth(result.rx_drain, rx);
+      if (rx) lane.refill();
+      if (!active) std::this_thread::yield();
     }
     return result;
   }

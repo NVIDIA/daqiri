@@ -61,5 +61,14 @@ int main() {
   require(work.complete_through(work.next_id() - 1, false, packet_done, burst_done));
   require(completed.size() == 4 && failures[3]);  // Preserve errors from earlier CQEs.
   require(!work.complete_through(UINT64_MAX, false, packet_done, burst_done));
+
+  work.posted(&first, 0, true);
+  work.posted(&first, 1, true);
+  work.posted(&second, 0);
+  require(work.read_pending());
+  std::vector<int*> released;
+  work.reclaim([&](int* burst) { released.push_back(burst); });
+  require(released.size() == 2 && released[0] != released[1] && work.empty());
+  require(!work.read_pending());
   return 0;
 }

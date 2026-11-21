@@ -16,7 +16,7 @@ inline bool rdma_range_valid(uint64_t address, uint64_t length, uint64_t base, u
 }
 
 // Internal monotonically increasing SQ IDs keep caller-provided IDs independent
-// of completion ordering. A signaled, fenced SQ completion retires preceding WRs.
+// of completion ordering. A signaled SQ completion retires preceding WRs.
 // Each burst is delivered once, after every posted WR has retired.
 template <typename Burst>
 class RdmaWorkTracking {
@@ -35,6 +35,13 @@ class RdmaWorkTracking {
   void clear() {
     entries_.clear();
     pending_.clear();
+    last_read_id_ = 0;
+    retired_id_ = 0;
+  }
+  template <typename Release>
+  void reclaim(Release release) {
+    for (const auto& entry : pending_) release(entry.first);
+    clear();
   }
   uint64_t next_id() const {
     return next_id_;
@@ -43,7 +50,12 @@ class RdmaWorkTracking {
     return entries_.size();
   }
 
-  void posted(Burst* burst, uint32_t packet) {
+  bool read_pending() const {
+    return last_read_id_ > retired_id_;
+  }
+
+  void posted(Burst* burst, uint32_t packet, bool is_read = false) {
+    if (is_read) last_read_id_ = next_id_;
     entries_.emplace(next_id_++, Entry{burst, packet});
     ++pending_[burst].count;
   }
@@ -58,6 +70,7 @@ class RdmaWorkTracking {
     if (entries_.find(id) == entries_.end()) {
       return false;
     }
+    retired_id_ = id;
     auto end = entries_.upper_bound(id);
     for (auto it = entries_.begin(); it != end;) {
       const auto entry = it->second;
@@ -81,6 +94,8 @@ class RdmaWorkTracking {
     bool failed = false;
   };
   uint64_t next_id_ = 1;
+  uint64_t last_read_id_ = 0;
+  uint64_t retired_id_ = 0;
   std::map<uint64_t, Entry> entries_;
   std::unordered_map<Burst*, Pending> pending_;
 };

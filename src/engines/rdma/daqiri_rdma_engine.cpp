@@ -27,6 +27,7 @@
 #include <cstring>
 #include <map>
 #include <memory>
+#include <utility>
 #include "src/daqiri_ring.h"
 #include "src/daqiri_pool.h"
 #include "src/metrics.h"
@@ -681,9 +682,22 @@ int RdmaEngine::setup_thread_params(rdma_thread_params* params, bool is_server) 
 
   DAQIRI_LOG_INFO("Creating QP for client ID {} with PD {}", (void*)params->client_id,
                   (void*)params->pd);
-  int ret = params->accurate_send
-                ? verbs_->create_timed_qp(params->client_id, params->pd, &qp_params.qp_attr)
-                : verbs_->cm_create_qp(params->client_id, params->pd, &qp_params.qp_attr);
+  const auto create_qp = [&]() {
+    if (params->accurate_send)
+      return verbs_->create_timed_qp(params->client_id, params->pd, &qp_params.qp_attr);
+    if (!params->direct_tx && qp_params.qp_attr.qp_type == IBV_QPT_RC) {
+      const int ret =
+          verbs_->create_send_batch_qp(params->client_id, params->pd, &qp_params.qp_attr);
+      if (ret == 0) {
+        params->atomic_send_batch = true;
+        return 0;
+      }
+      if (errno != EOPNOTSUPP && errno != ENOSYS && errno != EINVAL) return ret;
+    }
+    return verbs_->cm_create_qp(params->client_id, params->pd, &qp_params.qp_attr);
+  };
+  params->atomic_send_batch = false;
+  const int ret = create_qp();
   if (ret != 0) {
     DAQIRI_LOG_CRITICAL("Failed to create QP (accurate_send={}): {}", params->accurate_send,
                         strerror(errno));
@@ -770,9 +784,24 @@ int RdmaEngine::destroy_thread_params(rdma_thread_params* params) {
     params->qp_params.rx_cq_ex = nullptr;
   }
 
-  // The QP is gone: reclaim engine-owned receive reservations before slot reuse.
+  // The QP is gone: reclaim posted buffers before slot reuse.
+  params->outstanding_send_wr_ids.reclaim([this](BurstParams* burst) { free_tx_burst(burst); });
+  if (auto* direct = params->direct_state) {
+    for (const auto& slot : direct->sends)
+      if (slot.burst) free_tx_burst(slot.burst);
+    for (const auto& slot : direct->receives)
+      if (slot.burst) free_tx_burst(slot.burst);
+    while (direct->ready_head != direct->ready_tail) {
+      free_tx_burst(direct->ready[direct->ready_head++ & (RdmaDirectState::kReady - 1)]);
+    }
+    params->direct_state = nullptr;
+  }
+  for (auto& receive : params->single_receives) {
+    if (receive.burst) free_tx_burst(std::exchange(receive.burst, nullptr));
+  }
   for (auto& [id, work] : params->outstanding_receive_wr_ids) {
-    if (work.completion) free_tx_burst(work.completion);
+    // Split receives track their parent separately from each completion.
+    free_tx_burst(work.completion ? work.completion : work.burst);
   }
   for (auto& [parent, count] : params->pending_receives) free_tx_burst(parent);
   params->outstanding_receive_wr_ids.clear();
@@ -845,14 +874,12 @@ Status RdmaEngine::send_tx_burst(BurstParams* burst) {
     return Status::NOT_READY;
   }
   auto* params = connection->second;
-  std::unique_lock<std::mutex> progress_lock(params->progress_mutex);
-  registry_lock.unlock();
   if (rdma_force_quit.load() || params->ready_to_exit.load()) {
     return Status::NOT_READY;
   }
-  const bool caller_owned =
-      burst->transport_hdr.opcode == RDMAOpCode::RECEIVE ? params->direct_rx : params->direct_tx;
   const auto op = burst->transport_hdr.opcode;
+  const bool receive = op == RDMAOpCode::RECEIVE;
+  const bool caller_owned = receive ? params->direct_rx : params->direct_tx;
   if (op != RDMAOpCode::SEND && op != RDMAOpCode::RECEIVE && op != RDMAOpCode::RDMA_READ &&
       op != RDMAOpCode::RDMA_WRITE && op != RDMAOpCode::RDMA_WRITE_IMM) {
     if (!caller_owned) {
@@ -916,8 +943,18 @@ Status RdmaEngine::send_tx_burst(BurstParams* burst) {
     }
   }
 
-  const bool receive = burst->transport_hdr.opcode == RDMAOpCode::RECEIVE;
-  if (receive ? params->direct_rx : params->direct_tx) {
+  const bool reserve_completions = receive && burst->transport_hdr.num_pkts > 1;
+  const bool has_tx_timestamps = cache.tx_timestamp_ids != nullptr;
+  // The registry lock keeps the connection and its rings alive. Ordinary
+  // indirect submissions only publish work to the SPSC ring. Take the progress
+  // lock when submission also touches state shared with the poller.
+  std::unique_lock<std::mutex> progress_lock;
+  if (caller_owned || reserve_completions || has_tx_timestamps) {
+    progress_lock = std::unique_lock<std::mutex>(params->progress_mutex);
+    registry_lock.unlock();
+    if (rdma_force_quit.load() || params->ready_to_exit.load()) return Status::NOT_READY;
+  }
+  if (caller_owned) {
     if (burst->transport_hdr.num_pkts != 1 || burst->transport_hdr.num_segs != 1) {
       return Status::INVALID_PARAMETER;
     }
@@ -925,7 +962,7 @@ Status RdmaEngine::send_tx_burst(BurstParams* burst) {
     return post_burst(params, burst);
   }
   ring = params->qp_params.tx_ring;
-  if (receive && burst->transport_hdr.num_pkts > 1 && !reserve_receive_completions(params, burst)) {
+  if (reserve_completions && !reserve_receive_completions(params, burst)) {
     free_tx_burst(burst);
     return Status::NO_SPACE_AVAILABLE;
   }
@@ -935,14 +972,14 @@ Status RdmaEngine::send_tx_burst(BurstParams* burst) {
     const auto dropped_packets =
         burst->transport_hdr.num_pkts > 0 ? burst->transport_hdr.num_pkts : 1;
     metrics::add_dropped(counters, "tx_enqueue_failure", dropped_packets);
-    release_receive_completions(params, burst);
+    if (reserve_completions) release_receive_completions(params, burst);
     free_tx_burst(burst);
     DAQIRI_LOG_CRITICAL("Failed to enqueue TX work");
     return Status::NO_SPACE_AVAILABLE;
   }
 
   // The progress mutex prevents the worker from posting before this publication.
-  if (cache.tx_timestamp_ids) cache.tx_timestamp_submitted = true;
+  if (has_tx_timestamps) cache.tx_timestamp_submitted = true;
 
   return Status::SUCCESS;
 }
@@ -1085,7 +1122,7 @@ int RdmaEngine::poll_tx_completion(rdma_thread_params* params, ibv_wc* wc, uint6
 }
 
 void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, bool poll_rx,
-                                  bool poll_tx) {
+                                  bool poll_tx, int budget) {
   ibv_wc wc{};
   int num_comp;
   uint64_t timestamp_ns = UINT64_MAX;
@@ -1104,10 +1141,25 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
     }
   }
   // Check RQ first to reduce latency
-  for (int polled = 0; poll_rx && polled < MAX_CQ; ++polled) {
-    num_comp = poll_rx_completion(tparams, &wc, &timestamp_ns);
-    if (num_comp <= 0) {
-      break;
+  constexpr int cq_batch_size = 32;
+  ibv_wc rx_completions[cq_batch_size];
+  int rx_polled = 0;
+  int rx_next = 0;
+  for (int polled = 0; poll_rx && polled < budget; ++polled) {
+    if (tparams->direct_rx || tparams->qp_params.rx_cq_ex) {
+      if (poll_rx_completion(tparams, &wc, &timestamp_ns) <= 0) break;
+    } else {
+      if (rx_next == rx_polled) {
+        // This poller is the only producer. The consumer can only make more
+        // room before we enqueue these completions. Keep the one-CQE pending
+        // path when the ring is already full.
+        const int available = static_cast<int>(rx_ring->capacity() - rx_ring->count());
+        const int limit = std::min({budget - polled, cq_batch_size, std::max(1, available)});
+        rx_polled = verbs_->poll_cq(tparams->qp_params.rx_cq, limit, rx_completions);
+        if (rx_polled <= 0) break;
+        rx_next = 0;
+      }
+      wc = rx_completions[rx_next++];
     }
     if (wc.status == IBV_WC_SUCCESS && tparams->client_id->qp->qp_type == IBV_QPT_UD) {
       if (wc.byte_len < sizeof(ibv_grh))
@@ -1117,13 +1169,20 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
     }
     DAQIRI_LOG_DEBUG("GOT RX COMPLETION on connection {} queue {} wrid {}",
                      (void*)tparams->client_id, tparams->queue_idx, (int64_t)wc.wr_id);
-    auto it = outstanding_receive_wr_ids.find(wc.wr_id);
-    if (it == outstanding_receive_wr_ids.end()) {
-      DAQIRI_LOG_ERROR("Unknown RQ completion WR ID {}", wc.wr_id);
-      metrics::add_dropped(counters, "rx_unknown_wr_id", 1);
-      continue;
+    auto& single = tparams->single_receives[wc.wr_id % tparams->single_receives.size()];
+    rdma_thread_params::ReceiveWork received{};
+    if (single.id == wc.wr_id && single.burst) {
+      received.burst = std::exchange(single.burst, nullptr);
+    } else {
+      auto it = outstanding_receive_wr_ids.find(wc.wr_id);
+      if (it == outstanding_receive_wr_ids.end()) {
+        DAQIRI_LOG_ERROR("Unknown RQ completion WR ID {}", wc.wr_id);
+        metrics::add_dropped(counters, "rx_unknown_wr_id", 1);
+        continue;
+      }
+      received = it->second;
+      outstanding_receive_wr_ids.erase(it);
     }
-    const auto received = it->second;
     auto* parent = received.burst;
     const bool split = parent->transport_hdr.num_pkts > 1;
     msg = parent;
@@ -1177,12 +1236,9 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
         metrics::add_rx(counters, 1, static_cast<uint64_t>(wc.byte_len));
       }
     }
-    outstanding_receive_wr_ids.erase(it);
-    if (--pending_receives.at(parent) == 0) {
+    if (split && --pending_receives.at(parent) == 0) {
       pending_receives.erase(parent);
-      if (split) {
-        free_tx_burst(parent);
-      }
+      free_tx_burst(parent);
     }
     if (!rx_ring->enqueue(msg)) {
       tparams->pending_rx_burst = msg;
@@ -1230,7 +1286,7 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
   };
 
   // Check TX CQ for completion
-  for (int polled = 0; poll_tx && polled < MAX_CQ; ++polled) {
+  for (int polled = 0; poll_tx && polled < budget; ++polled) {
     num_comp = poll_tx_completion(tparams, &wc, &timestamp_ns);
     if (num_comp <= 0) {
       break;
@@ -1303,6 +1359,49 @@ void RdmaEngine::release_receive_completions(rdma_thread_params* params, BurstPa
   params->queued_receive_completions.erase(it);
 }
 
+Status RdmaEngine::post_send_batch(rdma_thread_params* params, BurstParams* burst, uint32_t lkey) {
+  auto& outstanding = params->outstanding_send_wr_ids;
+  const size_t count = burst->transport_hdr.num_pkts;
+  std::array<ibv_send_wr, MAX_RDMA_BATCH> requests;
+  std::array<ibv_sge, MAX_RDMA_BATCH> segments;
+  const bool fence = outstanding.read_pending();
+  for (size_t i = 0; i < count; ++i) {
+    segments[i] = {reinterpret_cast<uintptr_t>(burst->pkts[0][i]), burst->pkt_lens[0][i], lkey};
+    auto& wr = requests[i];
+    wr = {};
+    wr.wr_id = outstanding.next_id() + i;
+    wr.next = i + 1 < count ? &requests[i + 1] : nullptr;
+    wr.sg_list = &segments[i];
+    wr.num_sge = 1;
+    wr.opcode = IBV_WR_SEND;
+    // A legacy post can accept only a prefix. Each accepted WR must be
+    // signaled so a rejected tail cannot strand its buffers.
+    if (!params->atomic_send_batch || i + 1 == count) wr.send_flags = IBV_SEND_SIGNALED;
+    if (fence) wr.send_flags |= IBV_SEND_FENCE;
+  }
+  auto* qp = params->client_id->qp;
+  ibv_send_wr* bad = nullptr;
+  const int error = params->atomic_send_batch ? verbs_->post_send_batch(qp, requests.data())
+                                              : verbs_->post_send(qp, requests.data(), &bad);
+  const size_t posted = error ? (bad ? bad - requests.data() : 0) : count;
+  for (size_t i = 0; i < posted; ++i) outstanding.posted(burst, static_cast<uint32_t>(i));
+  if (posted) params->sends_since_signal = 0;
+  if (!error) return Status::SUCCESS;
+
+  DAQIRI_LOG_ERROR("Failed to post SQ batch after {} of {} requests: {}", posted, count,
+                   strerror(error));
+  const auto counters = get_rdma_metrics(cfg_, *params);
+  metrics::add_dropped(counters, "tx_post_failure", count - posted);
+  if (posted) {
+    outstanding.mark_failed(burst);
+  } else {
+    burst->transport_hdr.tx = true;
+    burst->transport_hdr.status = Status::GENERIC_FAILURE;
+    if (!params->qp_params.rx_ring->enqueue(burst)) free_tx_burst(burst);
+  }
+  return Status::SUCCESS;
+}
+
 Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
   using ReceiveWork = rdma_thread_params::ReceiveWork;
   auto& outstanding_send_wr_ids = tparams->outstanding_send_wr_ids;
@@ -1351,6 +1450,13 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
         return Status::INVALID_PARAMETER;
       }
 
+      const auto& cache = rdma_burst_cache(burst);
+      if (burst->transport_hdr.opcode == RDMAOpCode::SEND &&
+          tparams->qp_params.qp_attr.qp_type == IBV_QPT_RC && burst->transport_hdr.num_pkts > 1 &&
+          !tparams->accurate_send && !cache.tx_timestamp_ids) {
+        return post_send_batch(tparams, burst, lkey->second->lkey);
+      }
+
       bool posted_any = false;
       uint64_t remote_address = reinterpret_cast<uintptr_t>(burst->transport_hdr.raddr);
       for (int p = 0; p < burst->transport_hdr.num_pkts; p++) {
@@ -1397,12 +1503,13 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
             sge.length <= tparams->max_inline_data) {
           wr.send_flags |= IBV_SEND_INLINE;
         }
+        const uint64_t time = rdma_tx_time(burst, p);
         // A later SQ completion must not retire buffers from an unfinished READ.
-        if (tparams->qp_params.qp_attr.qp_type == IBV_QPT_RC) {
+        if (tparams->qp_params.qp_attr.qp_type == IBV_QPT_RC &&
+            (one_sided || tparams->accurate_send || outstanding_send_wr_ids.read_pending())) {
           wr.send_flags |= IBV_SEND_FENCE;
         }
 
-        const uint64_t time = rdma_tx_time(burst, p);
         int ret = time ? verbs_->post_timed_send(tparams->client_id->qp, &wr, time)
                        : verbs_->post_send(tparams->client_id->qp, &wr, &bad_wr);
         if (ret != 0) {
@@ -1434,7 +1541,8 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
           ++tparams->inline_wqes;
         }
         sends_since_signal = signal_send ? 0 : sends_since_signal + 1;
-        outstanding_send_wr_ids.posted(burst, static_cast<uint32_t>(p));
+        outstanding_send_wr_ids.posted(burst, static_cast<uint32_t>(p),
+                                       wr.opcode == IBV_WR_RDMA_READ);
       }
 
       break;
@@ -1513,10 +1621,16 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
 
         auto* completion =
             reserved == tparams->queued_receive_completions.end() ? nullptr : reserved->second[p];
-        outstanding_receive_wr_ids.emplace(next_receive_id++,
-                                           ReceiveWork{burst, static_cast<size_t>(p), completion});
+        const auto id = next_receive_id++;
+        auto& single = tparams->single_receives[id % tparams->single_receives.size()];
+        if (burst->transport_hdr.num_pkts == 1 && !single.burst) {
+          single = {id, burst};
+        } else {
+          outstanding_receive_wr_ids.emplace(
+              id, ReceiveWork{burst, static_cast<size_t>(p), completion});
+        }
         if (completion) reserved->second[p] = nullptr;
-        ++pending_receives[burst];
+        if (completion) ++pending_receives[burst];
       }
       release_receive_completions(tparams, burst);
       break;
@@ -1538,11 +1652,15 @@ void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
     return;
   }
   tparams->worker_started.store(true);
+  constexpr int work_budget = 32;
   while (!rdma_force_quit.load() && !tparams->ready_to_exit.load()) {
     std::lock_guard<std::mutex> lock(tparams->progress_mutex);
-    poll_completions(is_server, tparams, !tparams->direct_rx, !tparams->direct_tx);
-    BurstParams* burst = nullptr;
-    if (tparams->qp_params.tx_ring->dequeue(reinterpret_cast<void**>(&burst))) {
+    poll_completions(is_server, tparams, !tparams->direct_rx, !tparams->direct_tx, work_budget);
+    // Pending receive replenishments share this ring with sends. Give posting and
+    // completion polling bounded turns so a busy RX CQ cannot delay replenishment.
+    for (int posted = 0; posted < work_budget; ++posted) {
+      BurstParams* burst = nullptr;
+      if (!tparams->qp_params.tx_ring->dequeue(reinterpret_cast<void**>(&burst))) break;
       post_burst(tparams, burst);
     }
   }
@@ -2032,15 +2150,16 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
 }
 
 Status RdmaEngine::rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
-  // Look up connection ID to get port/q
-  auto iter = client_q_params_.find(reinterpret_cast<struct rdma_cm_id*>(conn_id));
-  if (iter == client_q_params_.end()) {
-    DAQIRI_LOG_CRITICAL("Failed to find client params for connection ID {}", conn_id);
+  if (!port || !queue) return Status::INVALID_PARAMETER;
+  std::lock_guard<std::mutex> lock(threads_mutex_);
+  const auto iter = connection_params_.find(reinterpret_cast<rdma_cm_id*>(conn_id));
+  if (iter == connection_params_.end()) {
+    DAQIRI_LOG_CRITICAL("Failed to find RDMA params for connection ID {}", conn_id);
     return Status::INVALID_PARAMETER;
   }
 
-  *port = iter->second.if_idx;
-  *queue = iter->second.queue_idx;
+  *port = iter->second->if_idx;
+  *queue = iter->second->queue_idx;
 
   return Status::SUCCESS;
 }
@@ -2398,7 +2517,6 @@ void RdmaEngine::run() {
             tparams_to_clear->direct_state->close();
           }
           std::lock_guard<std::mutex> progress_lock(tparams_to_clear->progress_mutex);
-          tparams_to_clear->outstanding_send_wr_ids.clear();
           destroy_thread_params(tparams_to_clear);
           tparams_to_clear->client_id = nullptr;
           tparams_to_clear->active = false;
@@ -2725,6 +2843,13 @@ Status RdmaEngine::get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool ser
     return Status::NOT_READY;
   }
   auto* params = connection->second;
+  if (!params->direct_rx && !params->direct_tx) {
+    if (rdma_force_quit.load() || params->ready_to_exit.load()) return Status::NOT_READY;
+    // Only the worker produces completions. The registry lock protects the
+    // ring lifetime while the application consumes them without stalling it.
+    return params->qp_params.rx_ring->dequeue(reinterpret_cast<void**>(burst)) ? Status::SUCCESS
+                                                                               : Status::NOT_READY;
+  }
   std::unique_lock<std::mutex> progress_lock(params->progress_mutex);
   registry_lock.unlock();
   if (rdma_force_quit.load() || params->ready_to_exit.load()) {
