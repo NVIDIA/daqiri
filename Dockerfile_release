@@ -87,6 +87,8 @@ RUN case "${TARGETARCH}" in \
 # notebook, networking, and packaging dependencies. Preserve its pinned stack.
 # GHSA-27vj-qcqg-25rc: fixed in fsspec 2026.6.0.
 # ONNX 1.23.2 retains the earlier ONNX security updates.
+# Pillow 13.0.0 fixes the reported image decoder/encoder vulnerabilities.
+# GHSA-pjvx-prjx-h659: fixed in nbconvert 7.17.2; retain the notebook stack.
 # Remove unused training tools: datasets caps fsspec; torchtitan needs datasets.
 # W&B is unused by DAQIRI and bundles the vulnerable Go wandb-core executable.
 # The base image's constraints pin older versions, so override them only here.
@@ -100,6 +102,8 @@ RUN python3 -m pip uninstall -y \
     && PIP_CONSTRAINT=/dev/null python3 -m pip install --no-cache-dir --no-deps \
       'fsspec==2026.6.0' \
       'onnx==1.23.2' \
+      'pillow==13.0.0' \
+      'nbconvert==7.17.2' \
       'pytest==8.4.2' \
       'iniconfig==2.1.0' \
       'pluggy==1.6.0' \

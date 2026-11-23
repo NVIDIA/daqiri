@@ -27,13 +27,54 @@ print('DAQIRI Python:', daqiri.__version__)
 PY
 python3 -m pip check
 python3 - <<'PY'
+import base64
 import importlib.metadata as metadata
 from importlib.util import find_spec
+from io import BytesIO
 from pathlib import Path
 import tempfile
 import fsspec
 import mistune
+import nbformat
 import torch
+import torchvision.transforms as transforms
+from nbconvert import HTMLExporter
+from nbconvert.preprocessors import ExtractOutputPreprocessor
+from packaging.version import Version
+from PIL import Image
+
+assert Version(metadata.version('pillow')) >= Version('13.0.0')
+assert Version(metadata.version('nbconvert')) >= Version('7.17.2')
+for package in ('jupyterlab', 'jupyter-server', 'notebook'):
+    print(f'Retained {package}: {metadata.version(package)}')
+
+# Exercise the image path used by topology diagrams and torchvision inputs.
+image = Image.new('RGB', (8, 8), (20, 40, 60))
+for image_format in ('PNG', 'JPEG', 'TIFF'):
+    encoded = BytesIO()
+    image.save(encoded, format=image_format)
+    encoded.seek(0)
+    with Image.open(encoded) as decoded:
+        tensor = transforms.ToTensor()(decoded.convert('RGB'))
+    assert tensor.shape == (3, 8, 8)
+print('Pillow image round trips and torchvision preprocessing passed')
+
+notebook = nbformat.v4.new_notebook(cells=[nbformat.v4.new_markdown_cell('SDK notebook check')])
+html, _ = HTMLExporter().from_notebook_node(notebook)
+assert 'SDK notebook check' in html
+# GHSA-pjvx-prjx-h659: extracted output names must remain within output_files_dir.
+for filename in ('safe.png', '../../escape.png', '/tmp/escape.png'):
+    output = nbformat.v4.new_output(
+        'display_data', data={'image/png': base64.b64encode(b'image').decode()},
+        metadata={'filename': filename},
+    )
+    notebook = nbformat.v4.new_notebook(cells=[nbformat.v4.new_code_cell(outputs=[output])])
+    _, resources = ExtractOutputPreprocessor(enabled=True)(
+        notebook, {'output_files_dir': 'outputs', 'outputs': {}}
+    )
+    expected = str(Path('outputs') / Path(filename).name)
+    assert resources['outputs'] == {expected: b'image'}, resources['outputs']
+print('Notebook HTML export and output filename traversal checks passed')
 
 # Exercise the excessive-emphasis input from GHSA-6m44-fpc8-c3rq.
 mistune.html('*' * 1000)
