@@ -758,7 +758,8 @@ Status daqiri_init(NetworkConfig& config) {
   return daqiri_init(config, no_bindings);
 }
 
-Status daqiri_init(NetworkConfig& config, const MemoryRegionBindings& bindings) {
+static Status daqiri_init_impl(NetworkConfig& config, const MemoryRegionBindings& bindings,
+                               const DeviceMemoryPrefixes& prefixes) {
   if (g_daqiri_engine != nullptr) {
     DAQIRI_LOG_ERROR("DAQIRI is already initialized; call shutdown() before daqiri_init()");
     return Status::INTERNAL_ERROR;
@@ -798,8 +799,10 @@ Status daqiri_init(NetworkConfig& config, const MemoryRegionBindings& bindings) 
   if (config.common_.stream_type == StreamType::SOCKET &&
       (config.common_.protocol == SocketProtocol::TCP ||
        config.common_.protocol == SocketProtocol::UDP)) {
-    if (!bindings.empty()) {
-      DAQIRI_LOG_ERROR("External memory bindings are not supported for direct TCP/UDP sockets");
+    if (!bindings.empty() || !prefixes.empty()) {
+      DAQIRI_LOG_ERROR(
+          "External memory bindings and device prefixes are not supported for direct TCP/UDP "
+          "sockets");
       return Status::NOT_SUPPORTED;
     }
     std::unordered_set<std::string> gpu_mrs;
@@ -855,7 +858,8 @@ Status daqiri_init(NetworkConfig& config, const MemoryRegionBindings& bindings) 
 
   auto engine = &(EngineFactory::get_active_engine());
 
-  if (engine->set_external_memory_regions(config, bindings) != Status::SUCCESS) {
+  if (engine->set_external_memory_regions(config, bindings) != Status::SUCCESS ||
+      engine->set_device_memory_prefixes(config, prefixes) != Status::SUCCESS) {
     reset_active_engine();
     metrics::shutdown();
     return Status::INVALID_PARAMETER;
@@ -879,6 +883,11 @@ Status daqiri_init(NetworkConfig& config, const MemoryRegionBindings& bindings) 
   }
 
   return Status::SUCCESS;
+}
+
+Status daqiri_init(NetworkConfig& config, const MemoryRegionBindings& bindings) {
+  static const DeviceMemoryPrefixes no_prefixes;
+  return daqiri_init_impl(config, bindings, no_prefixes);
 }
 
 namespace {
@@ -1095,10 +1104,17 @@ Status daqiri_init_from_yaml_file(const std::string& yaml_path) {
 
 Status daqiri_init_from_yaml_file(const std::string& yaml_path,
                                   const MemoryRegionBindings& bindings) {
+  static const DeviceMemoryPrefixes no_prefixes;
+  return daqiri_init_from_yaml_file(yaml_path, bindings, no_prefixes);
+}
+
+Status daqiri_init_from_yaml_file(const std::string& yaml_path,
+                                  const MemoryRegionBindings& bindings,
+                                  const DeviceMemoryPrefixes& prefixes) {
   NetworkConfig config;
   const Status parse_status = parse_network_config_from_yaml_file(yaml_path, config);
   if (parse_status != Status::SUCCESS) { return parse_status; }
-  return daqiri_init(config, bindings);
+  return daqiri_init_impl(config, bindings, prefixes);
 }
 
 Status daqiri_init(const std::string& yaml_string_or_path) {

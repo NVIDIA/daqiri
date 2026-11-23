@@ -254,6 +254,33 @@ def test_raw_gpu_packet_uses_named_header_and_opaque_buffers(frontend, monkeypat
     assert server["rx_flow_id"] == interface["rx"]["flows"][0]["id"]
 
 
+@pytest.mark.parametrize(("selector", "region", "polling", "batch", "prepared"), [
+    (["--packet-sizes", "64,512"], "device:512:4096", "indirect", "32", True),
+    (["--packet-sizes", "64,512"], "device:470:4096", "indirect", "32", False),
+    (["--packet-size", "64"], "device:64:4096", "indirect", "1", False),
+    (["--packet-size", "64"], "device:64:4096", "direct", "32", False),
+    (["--message-size", "22"], "device:64:4096", "indirect", "32", False),
+])
+def test_raw_device_bandwidth_prepares_complete_frames_when_eligible(
+        frontend, monkeypatch, selector, region, polling, batch, prepared):
+    topology = importlib.import_module("daqiri_config.perftest")
+    monkeypatch.setattr(topology, "resolve_interface",
+                        lambda *_, **kw: topology.Interface("p0", "0000:03:00.0", "02:00:00:00:00:01"))
+    args = frontend.parse_args([
+        "bw", *RAW_IBVERBS, *selector, "--tx-mr", region, "--rx-mr", "device:1400:4096",
+        "--tx-poll", polling, "--batch-size", batch,
+    ])
+    frontend.resolve(args)
+    for case, size in enumerate(args.sizes):
+        document = frontend.build_config(args, case, hardware=False, rtt=False)
+        worker = document["perftest"]
+        assert worker["prepared_device_frames"] is prepared
+        assert worker["named_sender"] is not prepared
+        assert worker["size"] == (size if args.size_kind == "packet" else size + 42)
+        _, client = worker["lanes"]
+        assert client["tx"][0]["zero_init"]
+
+
 def test_raw_dpdk_device_payload_requires_host_header(frontend, monkeypatch):
     topology = importlib.import_module("daqiri_config.perftest")
     monkeypatch.setattr(topology, "resolve_interface",

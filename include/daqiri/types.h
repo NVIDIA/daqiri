@@ -217,6 +217,7 @@ struct ExternalMemoryRegion {
 };
 
 using MemoryRegionBindings = std::unordered_map<std::string, ExternalMemoryRegion>;
+using DeviceMemoryPrefixes = std::unordered_map<std::string, std::vector<uint8_t>>;
 
 struct MemoryRegionRequirement {
   MemoryKind kind = MemoryKind::INVALID;

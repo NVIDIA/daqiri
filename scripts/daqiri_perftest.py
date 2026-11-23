@@ -663,6 +663,9 @@ def main(argv=None) -> int:
                 message = ("Each message is one IPv4/UDP payload." if args.size_kind == "message"
                            else "The named sender supplies the header. Packet sizes count full frames.")
                 print(f"Using the raw ibverbs named sender. {message}", file=sys.stderr, flush=True)
+            elif args.prepared_device_frames:
+                print("Preparing complete device frames at initialization for compatible mlx5 eMPW bursts.",
+                      file=sys.stderr, flush=True)
             if args.dry_run:
                 for path in configs:
                     print(path.read_text(), end="")

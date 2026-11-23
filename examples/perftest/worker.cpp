@@ -148,7 +148,7 @@ class Control {
 struct Settings {
   std::string transport, role, client_ip, server_ip;
   bool raw, roce, tcp, latency, hardware, rtt, hardware_rtt, bidirectional, tx_direct, rx_direct;
-  bool named_sender, opaque_payload;
+  bool named_sender, prepared_device_frames, opaque_payload;
   int bytes, message_size, batch, rx_depth, tx_depth, samples, warmup_samples, realtime_priority;
   uint64_t duration, warmup, timeout;
 
@@ -168,6 +168,7 @@ struct Settings {
         tx_direct(cfg["tx_direct"].as<bool>()),
         rx_direct(cfg["rx_direct"].as<bool>()),
         named_sender(cfg["named_sender"].as<bool>(false)),
+        prepared_device_frames(cfg["prepared_device_frames"].as<bool>(false)),
         opaque_payload(cfg["opaque_payload"].as<bool>(false)),
         bytes(cfg["size"].as<int>()),
         message_size(cfg["message_size"].as<int>(0)),
@@ -238,6 +239,12 @@ class Lane {
         throw std::runtime_error("device RX requires opaque payload buffers");
       }
     }
+    if (cfg_.prepared_device_frames && !tx_.empty() &&
+        (!cfg_.raw || cfg_.latency || cfg_.named_sender || cfg_.tx_direct || cfg_.batch < 2 ||
+         tx_.size() != 1 || !tx_[0].device || tx_[0].capacity < cfg_.bytes)) {
+      throw std::runtime_error(
+          "prepared device frames require one complete raw TX buffer per frame");
+    }
     if (cfg_.named_sender && !tx_.empty()) {
       auto& sender = sender_config_.emplace();
       sender.name_ = "perftest-" + node["role"].as<std::string>() + "-" + std::to_string(queue);
@@ -272,6 +279,13 @@ class Lane {
       header.udp.len = htons(cfg_.bytes - sizeof(ethhdr) - sizeof(iphdr));
       // IPv4 UDP permits an omitted checksum.
       std::memcpy(packet_.data(), &header, sizeof(header));
+    }
+  }
+
+  void add_device_frame_prefix(daqiri::DeviceMemoryPrefixes& prefixes) const {
+    if (cfg_.prepared_device_frames && !tx_.empty()) {
+      prefixes.emplace(tx_[0].name,
+                       std::vector<uint8_t>(packet_.begin(), packet_.begin() + kRawHeader));
     }
   }
 
@@ -636,8 +650,8 @@ class Lane {
             break;
         }
       check(status, "set packet lengths");
-      for (int i = 0; i < count; ++i) {
-        if (receive) continue;
+      const int packets_to_initialize = receive || cfg_.prepared_device_frames ? 0 : count;
+      for (int i = 0; i < packets_to_initialize; ++i) {
         int offset = 0;
         for (size_t j = 0; j < segments.size() && lengths[j]; ++j) {
           if (segments[j].device) {
@@ -1072,7 +1086,9 @@ YAML::Node benchmark(const char* input, const YAML::Node& document, const Settin
   if (cfg.role == "client" && control.receive()[0] != 1)
     throw std::runtime_error("peer did not initialize");
   EngineSession engine;
-  const auto status = daqiri::daqiri_init_from_yaml_file(input);
+  daqiri::DeviceMemoryPrefixes prefixes;
+  for (const auto& lane : lanes) lane.add_device_frame_prefix(prefixes);
+  const auto status = daqiri::daqiri_init_from_yaml_file(input, {}, prefixes);
   if (status != Status::SUCCESS && cfg.hardware) {
     throw TimestampUnavailable("DAQIRI initialization failed with hardware timestamps enabled");
   }

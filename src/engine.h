@@ -144,6 +144,7 @@ class Engine {
   virtual bool set_config_and_initialize(const NetworkConfig& cfg) = 0;
   Status set_external_memory_regions(const NetworkConfig& cfg,
                                      const MemoryRegionBindings& bindings);
+  Status set_device_memory_prefixes(const NetworkConfig& cfg, const DeviceMemoryPrefixes& prefixes);
   virtual void run() = 0;
 
   // Common free functions to override
@@ -314,6 +315,7 @@ class Engine {
   };
   std::vector<HugepageArena> hugepage_arenas_;
   std::unordered_map<std::string, ResolvedExternalMemoryRegion> external_mrs_;
+  DeviceMemoryPrefixes device_memory_prefixes_;
   // shared_ptr to an incomplete type -- only populated by the DPDK engine
   // (engine_dpdk.cpp). Layout is identical in every build.
   std::unordered_map<std::string, std::shared_ptr<struct rte_pktmbuf_extmem>> ext_pktmbufs_;

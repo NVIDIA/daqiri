@@ -8757,9 +8757,9 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
       return Status::GENERIC_FAILURE;
     }
   }
-  DAQIRI_LOG_INFO("TX queue {} ready in {} mode: {} slots of {}B, qp {} (mr {})", q.queue_id,
-                  queue_poll_mode_to_string(q.poll_mode), q.num_slots, q.slot_size, (void*)q.qp,
-                  q.mr_name);
+  DAQIRI_LOG_INFO("TX queue {} ready in {} mode: {} slots of {}B, qp {} (mr {}), eMPW eligible={}",
+                  q.queue_id, queue_poll_mode_to_string(q.poll_mode), q.num_slots, q.slot_size,
+                  (void*)q.qp, q.mr_name, q.empw_enabled);
   return Status::SUCCESS;
 }
 

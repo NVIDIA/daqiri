@@ -614,6 +614,23 @@ Status Engine::set_external_memory_regions(const NetworkConfig& cfg,
   return Status::SUCCESS;
 }
 
+Status Engine::set_device_memory_prefixes(const NetworkConfig& cfg,
+                                          const DeviceMemoryPrefixes& prefixes) {
+  for (const auto& [name, prefix] : prefixes) {
+    const auto region = cfg.mrs_.find(name);
+    if (region == cfg.mrs_.end() || region->second.kind_ != MemoryKind::DEVICE ||
+        !region->second.owned_ || external_mrs_.count(name) != 0 || prefix.empty() ||
+        prefix.size() > region->second.buf_size_) {
+      DAQIRI_LOG_ERROR(
+          "Device prefix for '{}' needs a DAQIRI-owned device region with sufficient buffer space",
+          name);
+      return Status::INVALID_PARAMETER;
+    }
+  }
+  device_memory_prefixes_ = prefixes;
+  return Status::SUCCESS;
+}
+
 Status Engine::populate_pool(daqiri::Ring* ring, const std::string& mr_name) {
   auto mr = cfg_.mrs_[mr_name];
   auto base = reinterpret_cast<char*>(ar_[mr_name].ptr_);
@@ -1057,6 +1074,22 @@ Status Engine::allocate_memory_regions() {
           }
           break;
         case MemoryKind::DEVICE: {
+          // Prepare a packed source for one strided upload. The destination
+          // spacing is the allocator's slot stride, which may exceed buf_size.
+          const auto prefix = device_memory_prefixes_.find(mr.first);
+          std::vector<uint8_t> prefix_rows;
+          if (prefix != device_memory_prefixes_.end()) {
+            const auto& bytes = prefix->second;
+            if (bytes.size() > mr.second.adj_size_) {
+              DAQIRI_LOG_ERROR("Device prefix is larger than the allocated slot for '{}'",
+                               mr.first);
+              return Status::INVALID_PARAMETER;
+            }
+            prefix_rows.resize(bytes.size() * mr.second.num_bufs_);
+            for (size_t offset = 0; offset < prefix_rows.size(); offset += bytes.size()) {
+              memcpy(prefix_rows.data() + offset, bytes.data(), bytes.size());
+            }
+          }
           unsigned int flag = 1;
           const auto align = align_ceil(mr.second.ttl_size_, GPU_PAGE_SIZE);
           CUdeviceptr cuptr;
@@ -1135,6 +1168,24 @@ Status Engine::allocate_memory_regions() {
               return Status::GENERIC_FAILURE;
             }
           }
+          if (!prefix_rows.empty()) {
+            CUDA_MEMCPY2D copy{};
+            copy.srcMemoryType = CU_MEMORYTYPE_HOST;
+            copy.srcHost = prefix_rows.data();
+            copy.srcPitch = prefix->second.size();
+            copy.dstMemoryType = CU_MEMORYTYPE_DEVICE;
+            copy.dstDevice = cuptr;
+            copy.dstPitch = mr.second.adj_size_;
+            copy.WidthInBytes = prefix->second.size();
+            copy.Height = mr.second.num_bufs_;
+            if (cuMemcpy2DUnaligned(&copy) != CUDA_SUCCESS || cuCtxSynchronize() != CUDA_SUCCESS) {
+              DAQIRI_LOG_ERROR("Could not initialize the device buffer prefixes for '{}'",
+                               mr.first);
+              cuMemFree(cuptr);
+              restore_previous();
+              return Status::GENERIC_FAILURE;
+            }
+          }
           ar.cuda_device_ = mr.second.affinity_;
           ar.deallocator_ = AllocRegion::Deallocator::CUDA_DEVICE;
           if (!restore_previous()) {
@@ -1174,6 +1225,7 @@ Status Engine::allocate_memory_regions() {
         mr.second.ttl_size_);
     ar_[mr.second.name_] = ar;
   }
+  device_memory_prefixes_.clear();
   DAQIRI_LOG_INFO("Finished allocating memory regions");
   return Status::SUCCESS;
 }

@@ -275,6 +275,12 @@ Status daqiri_init_from_yaml_string(const std::string &yaml_string,
 Status daqiri_init_from_yaml_file(const std::string &yaml_path);
 Status daqiri_init_from_yaml_file(const std::string &yaml_path,
                                   const MemoryRegionBindings &bindings);
+// Copy a host byte prefix into each slot of the specified DAQIRI-owned device
+// regions during allocation. Bytes after the prefix retain the configured
+// initialization policy.
+Status daqiri_init_from_yaml_file(const std::string& yaml_path,
+                                  const MemoryRegionBindings& bindings,
+                                  const DeviceMemoryPrefixes& prefixes);
 
 Status get_memory_region_requirements(const NetworkConfig &config,
                                       MemoryRegionRequirements &requirements);

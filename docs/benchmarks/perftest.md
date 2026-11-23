@@ -49,10 +49,15 @@ payload in TX regions. RX regions and DPDK TX regions hold the payload plus the
 42-byte Ethernet/IPv4/UDP header and any Ethernet padding. Use a message size
 that fits the path MTU.
 
-DAQIRI zeroes device TX regions during setup. Perftest leaves GPU payloads opaque.
-If raw ibverbs TX places the header in device storage, perftest uses the named
-sender to supply it and uses TX regions for payload. Packet sizes still count
-full frames. Raw DPDK requires the first 42 TX bytes to be CPU-accessible.
+DAQIRI zeroes device TX regions during setup. For raw ibverbs packet-size
+bandwidth runs with indirect TX and a batch larger than one, a single device
+region sized for the largest complete frame is initialized with its Ethernet,
+IPv4, and UDP header before traffic. On supported mlx5 devices, these bursts
+use enhanced multi-packet send (eMPW), the same TX path as the raw bandwidth
+sample. Perftest prints the selected frame layout. The named sender supplies
+the header for device layouts that only have room for the payload, and for
+device-header layouts in direct, single-packet, or latency runs. Raw DPDK
+requires the first 42 TX bytes to be CPU-accessible.
 
 ```bash
 sudo daqiri_perftest lat --transport raw --engine ibverbs --topology hw-loopback \

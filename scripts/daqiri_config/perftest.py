@@ -355,7 +355,13 @@ def resolve(args) -> list[str]:
 
     default_kind = ("huge" if args.engine == "dpdk" else
                     "host_pinned" if (args.raw or args.roce) else "host")
-    if args.raw and not args.named_sender:
+    tx_regions = args.tx_mr or ()
+    args.prepared_device_frames = (args.raw and args.engine == "ibverbs" and args.test == "bw"
+                                   and not args.named_sender and args.tx_poll == "indirect"
+                                   and args.batch_size > 1 and len(tx_regions) == 1
+                                   and tx_regions[0].kind == "device"
+                                   and tx_regions[0].buf_size >= max(args.sizes))
+    if args.raw and not (args.named_sender or args.prepared_device_frames):
         header_bytes = 0
         for region in args.tx_mr or ():
             if header_bytes >= UDP_IPV4_HEADER_SIZE:
@@ -536,6 +542,7 @@ def build_config(args, case: int, *, hardware: bool, rtt: bool) -> dict:
                          "size": frame_size(args, size),
                          "message_size": size if args.raw and args.size_kind == "message" else 0,
                          "named_sender": args.named_sender,
+                         "prepared_device_frames": args.prepared_device_frames,
                          "opaque_payload": args.opaque_payload,
                          "batch": 1 if args.tx_poll == "direct" else args.batch_size,
                          "tx_direct": args.tx_poll == "direct", "rx_direct": args.rx_poll == "direct",
