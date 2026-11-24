@@ -23,6 +23,7 @@ bool inline_eligible(const RdmaDirectMr& region, uint32_t length, uint32_t max_i
   return (kind == MemoryKind::HUGE || kind == MemoryKind::HOST_PINNED) && length <= max_inline;
 }
 constexpr uint32_t kCacheLineBytes = 64;
+constexpr size_t kReceiveBatch = 32;
 void prefetch_payload(const void* data, uint32_t bytes) {
   const auto* payload = static_cast<const char*>(data);
   for (uint32_t offset = 0; offset < bytes; offset += kCacheLineBytes) {
@@ -270,6 +271,8 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
     slot = {burst, tag};
     state.receives_posted = tag;
     ++state.receive_count;
+    rdma_burst_cache(burst).receive_capacity = state.sge.length;
+    rdma_burst_cache(burst).receive_repostable = false;
   } else {
     return Status::NOT_SUPPORTED;
   }
@@ -404,5 +407,124 @@ Status RdmaEngine::get_direct(RdmaDirectState& state, BurstParams** burst, bool 
   }
   *burst = state.ready[state.ready_head++ & (RdmaDirectState::kReady - 1)];
   return Status::SUCCESS;
+}
+
+Status RdmaEngine::rdma_poll_receive_batch(uintptr_t conn_id, BurstParams** bursts, size_t capacity,
+                                           size_t* received) {
+  if (!received) return Status::INVALID_PARAMETER;
+  *received = 0;
+  if (!bursts || capacity == 0 || capacity > kReceiveBatch) return Status::INVALID_PARAMETER;
+  auto* state = find_direct(conn_id);
+  if (!state) return Status::NOT_SUPPORTED;
+  RdmaDirectLease lease(state);
+  if (!lease || rdma_force_quit.load(std::memory_order_relaxed) ||
+      state->params->ready_to_exit.load(std::memory_order_relaxed)) {
+    return Status::NOT_READY;
+  }
+  auto& params = *state->params;
+  if (params.qp_params.rx_cq_ex || params.client_id->qp->qp_type != IBV_QPT_RC)
+    return Status::NOT_SUPPORTED;
+  if (state->ready_head != state->ready_tail) return Status::RESOURCE_IN_USE;
+
+  ibv_wc completions[kReceiveBatch];
+  const int count =
+      verbs_->poll_cq(params.qp_params.rx_cq, static_cast<int>(capacity), completions);
+  if (count <= 0) return count == 0 ? Status::NOT_READY : Status::GENERIC_FAILURE;
+  Status result = Status::SUCCESS;
+  uint64_t packets = 0;
+  uint64_t bytes = 0;
+  for (int i = 0; i < count; ++i) {
+    const auto& wc = completions[i];
+    auto& slot = state->receives[(wc.wr_id - 1) & (RdmaDirectState::kRequests - 1)];
+    if (!wc.wr_id || !slot.burst || slot.tag != wc.wr_id) {
+      result = Status::GENERIC_FAILURE;
+      metrics::add_dropped(state->counters, "rx_unknown_wr_id", 1);
+      continue;
+    }
+    auto* burst = slot.burst;
+    slot.burst = nullptr;
+    --state->receive_count;
+    burst->transport_hdr.tx = false;
+    burst->transport_hdr.imm = 0;
+    burst->transport_hdr.rdma_write_length = 0;
+    burst->transport_hdr.status = Status::GENERIC_FAILURE;
+    burst->transport_hdr.opcode = RDMAOpCode::RECEIVE;
+    burst->pkt_lens[0][0] = 0;
+    auto& cache = rdma_burst_cache(burst);
+    cache.receive_repostable = false;
+    if (wc.status == IBV_WC_SUCCESS && wc.opcode == IBV_WC_RECV) {
+      burst->transport_hdr.status = Status::SUCCESS;
+      burst->pkt_lens[0][0] = wc.byte_len;
+      cache.receive_repostable = true;
+    } else if (wc.status == IBV_WC_SUCCESS && wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
+               (wc.wc_flags & IBV_WC_WITH_IMM)) {
+      burst->transport_hdr.status = Status::SUCCESS;
+      burst->transport_hdr.opcode = RDMAOpCode::RDMA_WRITE_IMM;
+      burst->transport_hdr.imm = ntohl(wc.imm_data);
+      burst->transport_hdr.rdma_write_length = wc.byte_len;
+      cache.receive_repostable = true;
+    }
+    if (burst->transport_hdr.status == Status::SUCCESS) {
+      ++packets;
+      bytes += wc.byte_len;
+    } else {
+      metrics::add_dropped(state->counters, "rx_completion_error", 1);
+    }
+    bursts[(*received)++] = burst;
+  }
+  metrics::add_rx(state->counters, packets, bytes);
+  return result;
+}
+
+Status RdmaEngine::rdma_repost_receive_batch(uintptr_t conn_id, BurstParams* const* bursts,
+                                             size_t count, size_t* posted) {
+  if (!posted) return Status::INVALID_PARAMETER;
+  *posted = 0;
+  if (!bursts || count == 0 || count > kReceiveBatch) return Status::INVALID_PARAMETER;
+  auto* state = find_direct(conn_id);
+  if (!state) return Status::NOT_SUPPORTED;
+  RdmaDirectLease lease(state);
+  if (!lease || rdma_force_quit.load(std::memory_order_relaxed) ||
+      state->params->ready_to_exit.load(std::memory_order_relaxed)) {
+    return Status::NOT_READY;
+  }
+  auto& params = *state->params;
+  if (params.qp_params.rx_cq_ex || params.client_id->qp->qp_type != IBV_QPT_RC)
+    return Status::NOT_SUPPORTED;
+  if (count > RdmaDirectState::kRequests - state->receive_count) return Status::NO_SPACE_AVAILABLE;
+
+  ibv_recv_wr requests[kReceiveBatch]{};
+  ibv_sge segments[kReceiveBatch];
+  for (size_t i = 0; i < count; ++i) {
+    auto* burst = bursts[i];
+    const uint64_t tag = state->receives_posted + i + 1;
+    const auto& slot = state->receives[(tag - 1) & (RdmaDirectState::kRequests - 1)];
+    if (!burst || !rdma_burst_cache(burst).receive_repostable ||
+        rdma_burst_cache(burst).state != state || slot.burst) {
+      for (size_t j = 0; j < i; ++j) rdma_burst_cache(bursts[j]).receive_repostable = true;
+      return slot.burst ? Status::NO_SPACE_AVAILABLE : Status::INVALID_PARAMETER;
+    }
+    auto& cache = rdma_burst_cache(burst);
+    cache.receive_repostable = false;  // Also rejects repeated entries in this list.
+    segments[i] = {reinterpret_cast<uintptr_t>(burst->pkts[0][0]), cache.receive_capacity,
+                   cache.region->lkey};
+    requests[i].wr_id = tag;
+    requests[i].next = i + 1 < count ? &requests[i + 1] : nullptr;
+    requests[i].sg_list = cache.receive_capacity ? &segments[i] : nullptr;
+    requests[i].num_sge = cache.receive_capacity ? 1 : 0;
+  }
+  ibv_recv_wr* bad = nullptr;
+  const int error = verbs_->post_recv(params.client_id->qp, requests, &bad);
+  *posted = !error ? count : (bad ? static_cast<size_t>(bad - requests) : 0);
+  for (size_t i = 0; i < *posted; ++i) {
+    const uint64_t tag = state->receives_posted + i + 1;
+    state->receives[(tag - 1) & (RdmaDirectState::kRequests - 1)] = {bursts[i], tag};
+  }
+  for (size_t i = *posted; i < count; ++i) rdma_burst_cache(bursts[i]).receive_repostable = true;
+  state->receives_posted += *posted;
+  state->receive_count += static_cast<uint32_t>(*posted);
+  if (!error) return Status::SUCCESS;
+  metrics::add_dropped(state->counters, "rx_post_failure", count - *posted);
+  return Status::GENERIC_FAILURE;
 }
 }  // namespace daqiri

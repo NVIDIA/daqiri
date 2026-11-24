@@ -1250,22 +1250,28 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
     bool enqueue_failed = false;
     const auto timestamp_work =
         tparams->tx_timestamp_outstanding ? outstanding_send_wr_ids.find(wr_id) : std::nullopt;
-    const bool found = outstanding_send_wr_ids.complete_through(
+    const bool found = outstanding_send_wr_ids.complete_ranges_through(
         wr_id, status != Status::SUCCESS,
-        [&](BurstParams* completed, uint32_t packet, bool failed) {
-          const auto id = rdma_packet_tx_timestamp_id(completed, packet);
-          if (id != INVALID_TX_TIMESTAMP_ID) {
-            if (tparams->tx_timestamp_outstanding) --tparams->tx_timestamp_outstanding;
-            const bool exact = timestamp_work && timestamp_work->burst == completed &&
-                               timestamp_work->packet == packet;
-            finish_tx_timestamp(id,
-                                !failed && exact && timestamp_ns != UINT64_MAX
-                                    ? Status::SUCCESS
-                                    : Status::GENERIC_FAILURE,
-                                timestamp_ns);
+        [&](BurstParams* completed, uint32_t first, uint32_t count, bool failed) {
+          if (rdma_burst_cache(completed).tx_timestamp_ids) {
+            for (uint32_t packet = first; packet < first + count; ++packet) {
+              const auto id = rdma_packet_tx_timestamp_id(completed, packet);
+              if (id == INVALID_TX_TIMESTAMP_ID) continue;
+              if (tparams->tx_timestamp_outstanding) --tparams->tx_timestamp_outstanding;
+              const bool exact = timestamp_work && timestamp_work->burst == completed &&
+                                 timestamp_work->packet == packet;
+              finish_tx_timestamp(id,
+                                  !failed && exact && timestamp_ns != UINT64_MAX
+                                      ? Status::SUCCESS
+                                      : Status::GENERIC_FAILURE,
+                                  timestamp_ns);
+            }
           }
           if (!failed) {
-            metrics::add_tx(counters, 1, completed->pkt_lens[0][packet]);
+            uint64_t bytes = 0;
+            for (uint32_t packet = first; packet < first + count; ++packet)
+              bytes += completed->pkt_lens[0][packet];
+            metrics::add_tx(counters, count, bytes);
           }
         },
         [&](BurstParams* completed, bool failed) {
@@ -1384,8 +1390,10 @@ Status RdmaEngine::post_send_batch(rdma_thread_params* params, BurstParams* burs
   const int error = params->atomic_send_batch ? verbs_->post_send_batch(qp, requests.data())
                                               : verbs_->post_send(qp, requests.data(), &bad);
   const size_t posted = error ? (bad ? bad - requests.data() : 0) : count;
-  for (size_t i = 0; i < posted; ++i) outstanding.posted(burst, static_cast<uint32_t>(i));
-  if (posted) params->sends_since_signal = 0;
+  if (posted) {
+    outstanding.posted_range(burst, 0, static_cast<uint32_t>(posted));
+    params->sends_since_signal = 0;
+  }
   if (!error) return Status::SUCCESS;
 
   DAQIRI_LOG_ERROR("Failed to post SQ batch after {} of {} requests: {}", posted, count,

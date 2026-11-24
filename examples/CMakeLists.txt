@@ -208,6 +208,10 @@ add_executable(daqiri_example_rdma_read_write rdma_read_write_example.cpp)
 link_daqiri_bench(daqiri_example_rdma_read_write)
 install(TARGETS daqiri_example_rdma_read_write RUNTIME DESTINATION bin)
 
+add_executable(daqiri_bench_rdma_latency rdma_latency_bench.cpp)
+link_daqiri_bench(daqiri_bench_rdma_latency)
+install(TARGETS daqiri_bench_rdma_latency RUNTIME DESTINATION bin)
+
 add_executable(daqiri_perftest_worker perftest/worker.cpp)
 link_daqiri_bench(daqiri_perftest_worker)
 target_link_libraries(daqiri_perftest_worker PRIVATE Threads::Threads)

@@ -8,6 +8,8 @@
 #include <yaml-cpp/yaml.h>
 
 #include "tcp_record.h"
+#include "../rdma_receive_batch.h"
+#include "../rdma_pingpong.h"
 
 #include <arpa/inet.h>
 #include <endian.h>
@@ -385,6 +387,24 @@ class Lane {
   }
 
   bool poll_bandwidth(Counts& counts, bool receive) {
+    if (cfg_.roce && cfg_.rx_direct && cfg_.tx_direct && server && !cfg_.bidirectional &&
+        bulk_receive_) {
+      daqiri::bench::RdmaReceiveBatch batch;
+      const auto status =
+          daqiri::bench::recycle_rdma_receives(connection_, cfg_.bytes, true, batch);
+      if (status != Status::NOT_SUPPORTED) {
+        if (status == Status::NOT_READY) return false;
+        check(status, "recycle RoCE receives");
+        rx_posted_ -= static_cast<int>(batch.completed - batch.reposted);
+        counts.errors += batch.completed - batch.valid;
+        if (receive) {
+          counts.packets += batch.valid;
+          counts.bytes += batch.valid * cfg_.application_bytes();
+        }
+        return batch.completed != 0;
+      }
+      bulk_receive_ = false;
+    }
     auto burst = poll(false, nullptr);
     if (!burst) return false;
     if (completion_is_send(burst.get())) return true;
@@ -427,6 +447,12 @@ class Lane {
 
   bool prepares_echo() const {
     return cfg_.raw && cfg_.rtt && cfg_.tx_direct && cfg_.rx_direct;
+  }
+
+  daqiri::bench::RdmaPingPong prepare_rdma_ping_pong() const {
+    return daqiri::bench::RdmaPingPong(connection_, server, cfg_.bytes, cfg_.rx_depth,
+                                       cfg_.opaque_payload, cfg_.timeout, tx_.front().name,
+                                       rx_.front().name);
   }
 
   bool echo_prepared_probe(uint64_t id, uint64_t sequence, const Control& control) {
@@ -716,6 +742,7 @@ class Lane {
   std::optional<daqiri::RawUdpEndpointConfig> sender_config_;
   daqiri::EndpointId sender_id_ = daqiri::INVALID_ENDPOINT_ID;
   uintptr_t connection_ = 0;
+  bool bulk_receive_ = true;
   std::vector<char> packet_;
   std::vector<Segment> tx_, rx_;
   std::unordered_set<void*> initialized_;
@@ -929,8 +956,44 @@ int64_t signed_difference(uint64_t end, uint64_t start) {
   return end >= start ? static_cast<int64_t>(end - start) : -static_cast<int64_t>(start - end);
 }
 
+YAML::Node latency_result(const Lane& lane, int timeouts, const std::vector<Probe>& probes) {
+  YAML::Node result;
+  result["direction"] = lane.server ? "server->client" : "client->server";
+  result["queue"] = lane.queue;
+  result["timeouts"] = timeouts;
+  YAML::Node rows(YAML::NodeType::Sequence);
+  for (const auto& probe : probes) {
+    YAML::Node row(YAML::NodeType::Sequence);
+    row.SetStyle(YAML::EmitterStyle::Flow);
+    row.push_back(probe.sequence);
+    row.push_back(probe.software);
+    if (probe.hardware)
+      row.push_back(*probe.hardware);
+    else
+      row.push_back(YAML::Node(YAML::NodeType::Null));
+    rows.push_back(row);
+  }
+  result["probes"] = rows;
+  return result;
+}
+
 YAML::Node latency_phase(const Settings& cfg, Lane& lane, bool origin, const Control& control) {
   lane.bind_thread();
+  std::vector<Probe> probes;
+  if (origin) probes.reserve(cfg.samples);
+  const uint64_t iterations = static_cast<uint64_t>(cfg.warmup_samples) + cfg.samples;
+  if (cfg.roce && cfg.rtt && !cfg.bidirectional && !cfg.hardware && cfg.tx_direct &&
+      cfg.rx_direct) {
+    auto ping_pong = lane.prepare_rdma_ping_pong();
+    control.barrier(5);
+    for (uint64_t seq = 0; seq < iterations; ++seq) {
+      const auto latency = ping_pong.probe(origin, seq, seq + 1 < iterations);
+      if (origin && seq >= static_cast<uint64_t>(cfg.warmup_samples))
+        probes.push_back({seq - cfg.warmup_samples, latency, std::nullopt});
+    }
+    control.barrier(7);
+    return origin ? latency_result(lane, 0, probes) : YAML::Node{};
+  }
   lane.prime();
   control.barrier(5);
   uint64_t nonce;
@@ -944,9 +1007,6 @@ YAML::Node latency_phase(const Settings& cfg, Lane& lane, bool origin, const Con
   }
   int timeouts = 0;
   int consecutive_misses = 0;
-  std::vector<Probe> probes;
-  if (origin) probes.reserve(cfg.samples);
-  const uint64_t iterations = static_cast<uint64_t>(cfg.warmup_samples) + cfg.samples;
   for (uint64_t seq = 0; seq < iterations; ++seq) {
     const bool measured = seq >= static_cast<uint64_t>(cfg.warmup_samples);
     const uint64_t probe_id = seq ^ nonce;
@@ -992,29 +1052,17 @@ YAML::Node latency_phase(const Settings& cfg, Lane& lane, bool origin, const Con
     std::optional<int64_t> hardware;
     if (cfg.hardware) {
       const uint64_t receive_timestamp = cfg.hardware_rtt ? echo.hardware : rx[2];
-      hardware = signed_difference(receive_timestamp, request.read(now_ns() + cfg.timeout));
+      const uint64_t transmit_timestamp = request.read(now_ns() + cfg.timeout);
+      const uint64_t span = receive_timestamp >= transmit_timestamp
+                                ? receive_timestamp - transmit_timestamp
+                                : transmit_timestamp - receive_timestamp;
+      if (span > cfg.timeout)
+        throw TimestampUnavailable("hardware timestamp interval exceeds the probe timeout");
+      hardware = signed_difference(receive_timestamp, transmit_timestamp);
     }
     if (measured) probes.push_back({seq - cfg.warmup_samples, finish - start, hardware});
   }
-  if (!origin) return {};
-  YAML::Node result;
-  result["direction"] = lane.server ? "server->client" : "client->server";
-  result["queue"] = lane.queue;
-  result["timeouts"] = timeouts;
-  YAML::Node rows(YAML::NodeType::Sequence);
-  for (const auto& probe : probes) {
-    YAML::Node row(YAML::NodeType::Sequence);
-    row.SetStyle(YAML::EmitterStyle::Flow);
-    row.push_back(probe.sequence);
-    row.push_back(probe.software);
-    if (probe.hardware)
-      row.push_back(*probe.hardware);
-    else
-      row.push_back(YAML::Node(YAML::NodeType::Null));
-    rows.push_back(row);
-  }
-  result["probes"] = rows;
-  return result;
+  return origin ? latency_result(lane, timeouts, probes) : YAML::Node{};
 }
 
 YAML::Node latency_role(const Settings& cfg, std::vector<Lane>& lanes, bool server,
@@ -1118,6 +1166,7 @@ YAML::Node benchmark(const char* input, const YAML::Node& document, const Settin
     result["window"]["elapsed_ns"] = window.duration;
     result["bandwidth"] = workers.results();
   }
+  if (cfg.roce) daqiri::print_stats();
   return result;
 }
 

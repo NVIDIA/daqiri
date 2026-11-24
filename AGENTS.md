@@ -89,6 +89,7 @@ Integration and performance verification is done via the benchmark executables i
 | `daqiri_bench_raw_reorder_quantize` | `raw_reorder_quantize_bench.cpp` | `daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml` |
 | `daqiri_example_rdma_read_write` | `rdma_read_write_example.cpp` | `daqiri_example_rdma_read_write.yaml` — descriptor exchange, WRITE/READ verification, WRITE_IMM notification, acknowledgment |
 | `daqiri_bench_rdma` | `rdma_bench.cpp` | Canonical example: `daqiri_bench_rdma_tx_rx.yaml`. Generate Spark netns/cross-host client and server roles with `scripts/gen_daqiri_config.py socket-pair --transport roce`. |
+| `daqiri_bench_rdma_latency` | `rdma_latency_bench.cpp` | Paired direct RC SEND ping-pong using role YAML and prepared buffers. See [DAQIRI perftest](docs/benchmarks/perftest.md) for invocation and settings. |
 | `daqiri_bench_socket` | `socket_bench.cpp` | Canonical examples: `daqiri_bench_socket_{udp,tcp}_tx_rx.yaml`. Generate Spark netns/cross-host client and server roles with `scripts/gen_daqiri_config.py socket-pair`. |
 | `daqiri_pool_ring_bench` | `pool_ring_bench.cpp` | none — microbenchmark comparing `daqiri::Ring`/`daqiri::ObjectPool` vs DPDK `rte_ring`/`rte_mempool` (SPSC/MPMC, single/bulk, thread sweep). The `rte_*` comparison arm compiles only in a DPDK-enabled build; takes no YAML/CLI args |
 

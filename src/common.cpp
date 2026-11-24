@@ -721,6 +721,18 @@ Status get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) {
   return g_daqiri_engine->get_rx_burst(burst, conn_id, server);
 }
 
+Status rdma_poll_receive_batch(uintptr_t conn_id, BurstParams** bursts, size_t capacity,
+                               size_t* received) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->rdma_poll_receive_batch(conn_id, bursts, capacity, received);
+}
+
+Status rdma_repost_receive_batch(uintptr_t conn_id, BurstParams* const* bursts, size_t count,
+                                 size_t* posted) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->rdma_repost_receive_batch(conn_id, bursts, count, posted);
+}
+
 Status set_reorder_cuda_stream(const std::string& interface_name,
                                const std::string& reorder_name,
                                cudaStream_t stream) {

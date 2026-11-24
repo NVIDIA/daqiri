@@ -48,6 +48,8 @@ PTP_CLOCK_TIME = struct.Struct("=qII")
 FINDING = re.compile(r" - (?:WARNING|ERROR|CRITICAL) - ")
 COUNTER = re.compile(r"^\s*(tx_bytes_phy|rx_bytes_phy|vport_loopback_bytes):\s+([\d,.]+)\s+Bps")
 PHY_PACKETS = ("tx_packets_phy", "rx_packets_phy")
+LATENCY_LABELS = {"application_rtt": "SW RTT", "tx_submit_to_rx_delivery": "SW one-way",
+                  "reply_rx_hw_minus_request_tx_cqe": "HW RTT", "rx_hw_minus_tx_cqe": "HW one-way"}
 
 
 def warn(message: str) -> None:
@@ -127,8 +129,8 @@ def parse_args(argv: list[str] | None = None):
         parser.add_argument(f"--{direction}-cores", type=lambda s: [integer(v) for v in s.split(",")])
         parser.add_argument(f"--{direction}-poll", choices=("direct", "indirect"),
                             help="defaults to direct for raw ibverbs and RoCE latency, indirect otherwise")
-        depth_help = ("RoCE receive work-request depth for bandwidth, defaults to up to 1024 "
-                      "per queue based on RX buffers and the shared burst pool" if direction == "rx" else
+        depth_help = ("RoCE receive work-request depth, defaults to up to 1024 per queue "
+                      "for bandwidth and 1 for latency" if direction == "rx" else
                       "RoCE send work-request depth, defaults to 128")
         parser.add_argument(f"--{direction}-depth", type=positive, help=depth_help)
     sizes = parser.add_mutually_exclusive_group()
@@ -526,6 +528,10 @@ def run_case(args, worker, path, output, peer, hardware, case):
         result = yaml.safe_load(output.read_text())
         result["local_route"] = args.local_route
         result["configuration"] = yaml.safe_load(path.read_text())
+        result["interfaces"] = {role: interface.name for role, interface in args.interfaces.items()}
+        env_names = ("DAQIRI_IBV_STRIDING",) if args.engine == "ibverbs" else (
+            ("DAQIRI_RDMA_SEND_SIGNAL_EVERY",) if args.roce else ())
+        result["environment"] = {name: os.environ[name] for name in env_names if name in os.environ}
         result["counters"] = [
             monitor.result(result.get("window"), args.topology == "hw-loopback") | {
                 "endpoint_roles": [role for role, intf in args.interfaces.items()
@@ -581,35 +587,145 @@ def collect(args, peers, size, rtt):
     return results, samples, counters
 
 
-def print_case(args, result):
-    size = result["size"]
-    for row in result["measurements"]:
-        geometry = f"{size} B message" if args.raw and args.size_kind == "message" else f"{size} B"
-        label = f"{geometry} {row['direction']} q{row['queue']}"
-        if args.test == "bw":
-            print(f"{label} {row['kind']}: {row['gbps']:.3f} application Gb/s, "
-                  f"{row['packets']:,} {'frames' if args.size_kind == 'packet' else 'messages'} "
-                  f"({row['messages_per_second']:,.0f}/s), {row['errors']} errors, "
-                  f"{row['drain_packets']} drained")
+def print_table(title, headings, rows, *, left=()):
+    data = [headings, *(tuple(map(str, row)) for row in rows)]
+    widths = [max(map(len, column)) for column in zip(*data)]
+    formats = tuple(f"{{:{'<' if name in left else '>'}{width}}}"
+                    for name, width in zip(headings, widths))
+    print(f"\n{title}")
+    for index, row in enumerate(data):
+        print("  ".join(fmt.format(value) for fmt, value in zip(formats, row)).rstrip())
+        if index == 0:
+            print("  ".join("-" * width for width in widths))
+
+
+def print_configuration(report):
+    settings = report["settings"]
+    lat = settings["test"] == "lat"
+    size_unit = "frame B excluding FCS" if settings["size_kind"] == "packet" else "message B"
+    sizes = ", ".join(map(str, settings["sizes"]))
+    workload = (f"{settings['samples']:,} measured + {settings['warmup_samples']:,} warmup probes"
+                if lat else f"{settings['seconds']} s measured + {settings['warmup_seconds']} s warmup")
+    direction = "bidirectional" if settings["bidirectional"] else "client->server"
+    print("DAQIRI perftest")
+    print(f"  Test           {'latency' if lat else 'bandwidth'}")
+    print(f"  Engine         {report['engine']} ({settings['transport']})")
+    print(f"  Topology       {settings['topology']} ({report['role']})")
+    print(f"  Sizes          {sizes} {size_unit}")
+    print(f"  Workload       {direction}, {settings['queues']} queue pair(s), {workload} per case")
+    if report.get("control"):
+        print(f"  Control        {report['control']} (peer timeout {report['peer_timeout']} s)")
+    print(f"  IP addresses   client {settings['client_address']}, server {settings['server_address']}")
+    if settings["transport"] == "raw":
+        print(f"  UDP flow base  {settings['server_port']}")
+    elif settings["transport"] == "roce":
+        print(f"  Server port    {settings['server_port']}")
+    else:
+        print(f"  Base ports     client {settings['client_port']}, server {settings['server_port']}")
+    if lat:
+        timings = dict.fromkeys(LATENCY_LABELS[method] for case in report["cases"]
+                               for row in case["measurements"]
+                               for method in (row["software_method"], row["hardware_method"]) if method)
+        print(f"  Timing         {', '.join(timings)}")
+        validation = "receive metadata" if report.get("opaque_payload") else "payload token"
+        print(f"  Probe matching {validation}, one probe in flight")
+    for role, clock in report.get("hardware_preflight", {}).items():
+        firmware = {True: "enabled", False: "disabled", None: "unverified"}[clock.get("enabled")]
+        print(f"  PHC {role:<10} {clock.get('identity', 'unavailable')}, firmware {firmware}")
+
+    queues = []
+    for peer in report["cases"][0]["participants"]:
+        config = peer["configuration"]
+        if not config:
             continue
-        for mode in ("software", "hardware"):
-            data = row[mode]
-            if data["samples"]:
-                method = row[f"{mode}_method"]
-                print(f"{label} {method}: min {data['min_ns']} median {data['median_ns']} "
-                      f"p95 {data['p95_ns']} p99 {data['p99_ns']} max {data['max_ns']} ns "
-                      f"({data['samples']} samples, {row['timeouts']} timeouts)")
-    if args.test == "bw":
-        for counter in result["counters"]:
-            if not counter["available"]:
-                print(f"{counter['interface']} has no stable hardware rate samples")
-            for name, rates in counter["stable_gbps_samples"].items():
-                print(f"{counter['interface']} {counter['label']} ({name}): "
-                      f"{statistics.median(rates):.3f} Gb/s median "
-                      f"from {len(rates)} one-second samples")
-        if not result["counters"]:
-            print("Hardware rate counters unavailable")
-        print(f"Traffic path: {result['path']}", flush=True)
+        native = config["daqiri"]["cfg"]
+        worker = config["perftest"]
+        role = peer["role"]
+        scheduling = (f"FIFO {worker['realtime_priority']}" if worker['realtime_priority']
+                      else "default scheduling")
+        print(f"  {role.capitalize():<14} DAQIRI {peer['daqiri_version']}, master CPU {native['master_core']}, "
+              f"{scheduling}, timeout {worker['timeout']} s")
+        for name, value in peer.get("environment", {}).items():
+            print(f"                 {name}={value}")
+        if worker["named_sender"]:
+            print("                 raw ibverbs named sender")
+        if worker.get("prepared_device_frames") and any("tx" in lane for lane in worker["lanes"]):
+            print("                 prebuilt device frames, eligible for mlx5 eMPW")
+        if settings["transport"] == "roce":
+            print(f"                 RC work-request depth TX {worker['tx_depth']}, RX {worker['rx_depth']}")
+        interfaces = {entry["name"]: entry for entry in native["interfaces"]}
+        raw_endpoints = set()
+        for lane in worker["lanes"]:
+            interface = interfaces[lane["interface"]]
+            name = peer.get("interfaces", {}).get(lane["role"])
+            address = f"{name} ({interface['address']})" if name else interface["address"]
+            if settings["transport"] == "raw":
+                endpoint = f"{address}, MAC {lane['src_mac']}, peer {lane['dst_mac']}"
+                if endpoint not in raw_endpoints:
+                    print(f"                 {endpoint}")
+                    raw_endpoints.add(endpoint)
+            for direction in ("tx", "rx"):
+                section = interface.get(direction, {})
+                for queue in section.get("queues", []):
+                    if queue["id"] != lane["qid"]:
+                        continue
+                    regions = "+".join(f"{mr['kind']}:{mr['buf_size']}:{mr['num_bufs']}:{mr['affinity']}"
+                                       for mr in lane[direction])
+                    app_cpu = lane.get("rx_app_cpu", lane["cpu"]) if direction == "rx" else lane["cpu"]
+                    queues.append((lane["role"], lane["queue"], direction.upper(), address, app_cpu,
+                                   queue.get("poll_mode", "indirect"), queue.get("cpu_core", "-"),
+                                   queue.get("batch_size", 1), regions))
+    if queues:
+        print_table("Queue configuration (MR kind:bytes:count:affinity)",
+                    ("Role", "Q", "Side", "Interface", "App CPU", "Polling", "Poll CPU", "Batch", "Memory"),
+                    queues, left=("Role", "Side", "Interface", "Polling", "Memory"))
+
+
+def print_report(report):
+    print_configuration(report)
+    cases = report["cases"]
+    packets = report["settings"]["size_kind"] == "packet"
+    size_column = "Frame B" if packets else "Msg B"
+    rows = [(case["size"], row) for case in cases for row in case["measurements"]]
+    if report["settings"]["test"] == "lat":
+        results = []
+        for size, row in rows:
+            for mode in ("software", "hardware"):
+                data = row[mode]
+                if data["samples"]:
+                    times = tuple(f"{data[key] / 1000:.3f}" for key in
+                                  ("min_ns", "median_ns", "p95_ns", "p99_ns", "max_ns"))
+                    results.append((size, row["direction"], row["queue"], LATENCY_LABELS[row[f"{mode}_method"]],
+                                    f"{data['samples']:,}", *times, row["timeouts"]))
+        print_table("Latency (us)", (size_column, "Direction", "Q", "Timing", "Samples",
+                                      "Min", "Median", "P95", "P99", "Max", "Timeouts"),
+                    results, left=("Direction", "Timing"))
+        return
+
+    results = [(size, row["direction"], row["queue"], row["kind"], f"{row['packets']:,}",
+                f"{row['messages_per_second'] / 1e6:.3f}", f"{row['gbps']:.3f}",
+                row["errors"], f"{row['drain_packets']:,}") for size, row in rows]
+    print_table("Application bandwidth", (size_column, "Direction", "Q", "Side",
+                "Frames" if packets else "Messages", "Mpps" if packets else "Mmsg/s", "Gb/s", "Errors", "Drain"),
+                results, left=("Direction", "Side"))
+    counters = []
+    for case in cases:
+        for counter in case["counters"]:
+            rates = counter["stable_gbps_samples"]
+            counters.extend((case["size"], counter["interface"], name, f"{statistics.median(values):.3f}",
+                             len(values)) for name, values in rates.items())
+            if not rates:
+                counters.append((case["size"], counter["interface"], "-", "unavailable", 0))
+    if counters:
+        print_table("NIC throughput", (size_column, "Interface", "Counter", "Median Gb/s", "1s samples"),
+                    counters, left=("Interface", "Counter"))
+    else:
+        print("\nHardware rate counters unavailable")
+    paths = [(case["size"], case["path"]) for case in cases]
+    if len({path for _, path in paths}) == 1:
+        print(f"\nTraffic path  {paths[0][1]}")
+    else:
+        print_table("Traffic path", (size_column, "Path"), paths, left=("Path",))
 
 
 def path_label(args, counters, measurements, local_route) -> str:
@@ -733,41 +849,50 @@ def main(argv=None) -> int:
             print("Preflight complete. Starting benchmark.", file=sys.stderr, flush=True)
             report = {"schema": 1, "settings": settings(args), "role": args.role,
                       "engine": engine, "opaque_payload": args.opaque_payload,
+                      "control": f"{args.control[0]}:{args.control[1]}" if args.control else None,
+                      "peer_timeout": args.peer_timeout if peer else None,
                       "preflight": findings, "notices": notices,
                       "peer_preflight": peer_findings, "peer_notices": peer_notices,
                       "hardware_preflight": clocks, "cases": []}
             all_samples = []
-            for case, (size, path) in enumerate(zip(args.sizes, configs)):
-                current_hw = hardware
-                for _ in range(2):
-                    document = build_config(args, case, hardware=current_hw, rtt=rtt)
-                    path.write_text(render_document(document))
-                    status, results = run_case(args, worker, path, work / f"result-{case}.yaml",
-                                               peer, current_hw, case)
-                    if not status:
-                        break
-                    current_hw = False
-                    warn(f"Hardware timestamps unavailable for {size} bytes. Repeating with CPU timing.")
-                measurements, samples, counters = collect(args, results, size, rtt)
-                local_route = any(item["local_route"] for item in results)
-                result = {"size": size, "size_kind": args.size_kind,
-                          "measurements": measurements, "counters": counters,
-                          "path": path_label(args, counters, measurements, local_route)
-                          if args.test == "bw" else None,
-                          "participants": [
-                              {"role": item["role"], "daqiri_version": item["version"],
-                               "configuration": item["configuration"]}
-                              for item in results
-                          ]}
-                if args.raw:
-                    result["frame_size"] = frame_size(args, size)
-                for sample in samples:
-                    sample["size_kind"] = args.size_kind
+            try:
+                for case, (size, path) in enumerate(zip(args.sizes, configs)):
+                    if len(args.sizes) > 1:
+                        print(f"Measuring {size} B {args.size_kind}s", file=sys.stderr, flush=True)
+                    current_hw = hardware
+                    for _ in range(2):
+                        document = build_config(args, case, hardware=current_hw, rtt=rtt)
+                        path.write_text(render_document(document))
+                        status, results = run_case(args, worker, path, work / f"result-{case}.yaml",
+                                                   peer, current_hw, case)
+                        if not status:
+                            break
+                        current_hw = False
+                        warn(f"Hardware timestamps unavailable for {size} bytes. Repeating with CPU timing.")
+                    measurements, samples, counters = collect(args, results, size, rtt)
+                    local_route = any(item["local_route"] for item in results)
+                    result = {"size": size, "size_kind": args.size_kind,
+                              "measurements": measurements, "counters": counters,
+                              "path": path_label(args, counters, measurements, local_route)
+                              if args.test == "bw" else None,
+                              "participants": [
+                                  {"role": item["role"], "daqiri_version": item["version"],
+                                   "configuration": item["configuration"],
+                                   "interfaces": item.get("interfaces", {}),
+                                   "environment": item.get("environment", {})}
+                                  for item in results
+                              ]}
                     if args.raw:
-                        sample["frame_size"] = result["frame_size"]
-                report["cases"].append(result)
-                all_samples.extend(samples)
-                print_case(args, result)
+                        result["frame_size"] = frame_size(args, size)
+                    for sample in samples:
+                        sample["size_kind"] = args.size_kind
+                        if args.raw:
+                            sample["frame_size"] = result["frame_size"]
+                    report["cases"].append(result)
+                    all_samples.extend(samples)
+            finally:
+                if report["cases"]:
+                    print_report(report)
             if args.json:
                 args.json.write_text(json.dumps(report, indent=2) + "\n")
             if args.samples_csv and all_samples:

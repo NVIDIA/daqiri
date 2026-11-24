@@ -196,6 +196,14 @@ class Engine {
   virtual uint64_t get_burst_tot_byte(BurstParams* burst) = 0;
   virtual BurstParams* create_tx_burst_params() = 0;
   virtual Status get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server);
+  virtual Status rdma_poll_receive_batch(uintptr_t, BurstParams**, size_t, size_t* received) {
+    if (received) *received = 0;
+    return Status::NOT_SUPPORTED;
+  }
+  virtual Status rdma_repost_receive_batch(uintptr_t, BurstParams* const*, size_t, size_t* posted) {
+    if (posted) *posted = 0;
+    return Status::NOT_SUPPORTED;
+  }
   virtual Status get_rx_burst(BurstParams** burst, int port, int q) = 0;
   virtual Status get_rx_burst(BurstParams** burst, int port_id);
   virtual Status get_rx_burst(BurstParams** burst);

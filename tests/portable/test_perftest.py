@@ -84,6 +84,7 @@ def test_polling_defaults_and_overrides(frontend, monkeypatch, command, tx_direc
     ("bw", ["--role", "server", "--queues", "2", "--bidirectional"], 1019),
     ("bw", ["--queues", "2", "--bidirectional", "--tx-poll", "direct"], 383),
     ("lat", [], 1),
+    ("lat", ["--rx-depth", "32"], 32),
 ])
 def test_roce_receive_depth(frontend, monkeypatch, test, flags, depth):
     topology = importlib.import_module("daqiri_config.perftest")
@@ -95,6 +96,17 @@ def test_roce_receive_depth(frontend, monkeypatch, test, flags, depth):
     frontend.resolve(args)
     config = frontend.build_config(args, 0, hardware=False, rtt=False)
     assert config["perftest"]["rx_depth"] == depth
+
+
+def test_roce_latency_receive_depth_checks_all_queues(frontend, monkeypatch):
+    topology = importlib.import_module("daqiri_config.perftest")
+    monkeypatch.setattr(topology, "socket_interfaces", lambda *_: {})
+    monkeypatch.setattr(topology, "run_ip", lambda *_: [{}])
+    args = frontend.parse_args(["lat", "--transport", "roce", "--topology", "same-host",
+                               "--client-address", "192.0.2.1", "--server-address", "192.0.2.2",
+                               "--queues", "3", "--rx-depth", "512", "--size", "64"])
+    with pytest.raises(frontend.ConfigError, match="shared burst pool budget"):
+        frontend.resolve(args)
 
 
 def test_rejects_ambiguous_bdf_without_netdev(frontend, tmp_path):
@@ -129,6 +141,21 @@ def test_hardware_loopback_uses_one_port_and_disjoint_flows(frontend, monkeypatc
     (fallback,) = frontend.build_config(args, 0, hardware=False, rtt=False)["daqiri"]["cfg"]["interfaces"]
     assert "hardware_timestamps" not in fallback["rx"]
     assert "accurate_send" not in fallback["tx"]
+
+
+def test_roce_hardware_latency_requests_realtime_cqs(frontend, monkeypatch):
+    monkeypatch.setattr("daqiri_config.perftest.socket_interfaces", lambda *_: {})
+    monkeypatch.setattr("daqiri_config.perftest.run_ip", lambda *_: [{}])
+    args = frontend.parse_args([
+        "lat", "--transport", "roce", "--topology", "same-host",
+        "--client-address", "192.0.2.1", "--server-address", "192.0.2.2",
+    ])
+    frontend.resolve(args)
+    for hardware in (True, False):
+        config = frontend.build_config(args, 0, hardware=hardware, rtt=False)
+        for interface in config["daqiri"]["cfg"]["interfaces"]:
+            assert interface["tx"].get("accurate_send", False) is hardware
+            assert interface["rx"].get("hardware_timestamps", False) is hardware
 
 
 @pytest.mark.parametrize("bidirectional", [False, True])
@@ -396,17 +423,49 @@ def test_software_and_hardware_share_probe_rows(frontend):
     assert [(p["software_ns"], p["hardware_ns"]) for p in probes] == [(100, -4), (200, 10)]
 
 
-def test_hardware_rtt_labels_reply_timestamp_in_reports(frontend, capsys):
-    args = frontend.parse_args(["lat", *LOCAL_UDP, "--hardware-rtt"])
-    args.raw = True
-    args.size_kind = "packet"
+def test_hardware_rtt_labels_reply_timestamp_in_reports(frontend, monkeypatch, capsys):
+    monkeypatch.setattr("daqiri_config.perftest.resolve_interface", lambda *_args, **_kwargs:
+                        importlib.import_module("daqiri_config.perftest").Interface(
+                            "p0", "0000:03:00.0", "02:00:00:00:00:01"))
+    args = frontend.parse_args([
+        "lat", "--transport", "raw", "--engine", "ibverbs", "--topology", "same-host",
+        "--role", "client", "--interface", "p0", "--peer-mac", "02:00:00:00:00:02",
+        "--control", "127.0.0.1:18500", "--hardware-rtt", "--packet-size", "64",
+    ])
+    frontend.resolve(args)
     latency = {"direction": "client->server", "queue": 0, "timeouts": 0, "probes": [[0, 100, 80]]}
     rows, probes, _ = frontend.collect(args, [{"role": "client", "latency": [latency]}], 64, True)
-    frontend.print_case(args, {"size": 64, "measurements": rows})
+    frontend.print_report({"settings": frontend.settings(args), "engine": "ibverbs", "role": "client",
+                           "cases": [{"size": 64, "measurements": rows, "participants": [
+                               {"role": "client", "daqiri_version": "test",
+                                "configuration": frontend.build_config(args, 0, hardware=True, rtt=True),
+                                "interfaces": {"client": "p0"}}]}]})
     method = "reply_rx_hw_minus_request_tx_cqe"
     assert rows[0]["hardware_method"] == probes[0]["hardware_method"] == method
     assert probes[0]["software_method"] == "application_rtt"
-    assert f"{method}: min 80" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert output.index("Queue configuration") < output.index("Latency (us)")
+    assert "p0 (0000:03:00.0)" in output
+    assert "host_pinned:64:4096:0" in output
+    assert "SW RTT" in output and "0.100" in output
+    assert "HW RTT" in output and "0.080" in output
+
+
+def test_bandwidth_report_groups_application_and_nic_rates(frontend, capsys):
+    args = frontend.parse_args(["bw", *LOCAL_UDP, "--message-sizes", "64,512"])
+    frontend.resolve(args)
+    row = {"direction": "client->server", "queue": 0, "kind": "received", "packets": 20,
+           "messages_per_second": 2e6, "gbps": 1.024, "errors": 0, "drain_packets": 3}
+    cases = [{"size": size, "participants": [], "measurements": [row], "path": "verified",
+              "counters": [{"interface": "p0", "stable_gbps_samples": rates}]}
+             for size, rates in ((64, {"rx_bytes_phy": [1.2, 1.4]}), (512, {}))]
+    frontend.print_report({"settings": frontend.settings(args), "engine": "socket", "role": "local",
+                           "cases": cases})
+    output = capsys.readouterr().out
+    assert output.index("Workload") < output.index("Application bandwidth") < output.index("NIC throughput")
+    assert output.count("Application bandwidth") == output.count("NIC throughput") == 1
+    assert "Mmsg/s" in output and "1.024" in output
+    assert "rx_bytes_phy" in output and "1.300" in output and "unavailable" in output
 
 
 def test_hardware_failure_reruns_after_preflight(frontend, monkeypatch, tmp_path, capsys):

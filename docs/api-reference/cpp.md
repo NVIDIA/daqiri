@@ -1138,6 +1138,19 @@ workflow sections above show the common call order and ownership rules.
 | `rdma_get_immediate_data(burst, &value[, &written_bytes])` | Read a successful write-with-immediate request/completion's host-order value. |
 | `rdma_get_opcode(burst)` | Return the RDMA operation code recorded on a burst. |
 
+### Direct RDMA receive batches
+
+On a direct RC connection with ordinary RX completions, call
+`rdma_poll_receive_batch(conn_id, bursts, capacity, &received)` to poll up to
+32 RX completions at once. This call services RX only. The application owns
+every returned burst and checks its `transport_hdr.status` before using the data.
+
+After processing the data, call
+`rdma_repost_receive_batch(conn_id, bursts, received, &posted)` to replenish
+the QP from successful completions. Reposting uses the original buffer
+capacity. The QP owns the first `posted` bursts even if posting fails partway.
+The application can retry or free the remaining caller-owned bursts.
+
 ### RDMA reads and writes
 
 On an established `roce://` RC connection, `RDMA_READ` fetches remote memory

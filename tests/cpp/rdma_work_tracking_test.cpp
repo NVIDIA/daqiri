@@ -62,6 +62,15 @@ int main() {
   require(completed.size() == 4 && failures[3]);  // Preserve errors from earlier CQEs.
   require(!work.complete_through(UINT64_MAX, false, packet_done, burst_done));
 
+  const auto first_id = work.next_id();
+  work.posted_range(&third, 0, 32);
+  require(work.size() == 32 && work.find(first_id + 12)->packet == 12);
+  require(work.complete_through(first_id + 12, true, packet_done, burst_done));
+  require(work.size() == 19 && !work.find(first_id + 12) && completed.size() == 4);
+  require(work.find(first_id + 13)->packet == 13);
+  require(work.complete_through(first_id + 31, false, packet_done, burst_done));
+  require(completed.size() == 5 && completed.back() == &third && failures.back());
+
   work.posted(&first, 0, true);
   work.posted(&first, 1, true);
   work.posted(&second, 0);

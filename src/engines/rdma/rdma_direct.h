@@ -81,6 +81,8 @@ struct RdmaBurstCache {
   TxTimestampId* tx_timestamp_ids = nullptr;
   uint16_t tx_timestamp_count = 0;
   bool tx_timestamp_submitted = false;
+  bool receive_repostable = false;
+  uint32_t receive_capacity = 0;
 };
 static_assert(sizeof(BurstTransportHeader) <=
               ADV_NETWORK_HEADER_SIZE_BYTES - sizeof(RdmaBurstCache));

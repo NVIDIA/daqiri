@@ -255,6 +255,9 @@ def resolve(args) -> list[str]:
     resolve_sizes(args)
     supports_direct = args.engine == "ibverbs" or args.roce
     default_poll = "direct" if args.test == "lat" and supports_direct else "indirect"
+    if (args.roce and args.test == "bw" and args.role == "server" and
+            not args.bidirectional and args.tx_poll is None and args.rx_poll is None):
+        default_poll = "direct"
     args.tx_poll = args.tx_poll or default_poll
     args.rx_poll = args.rx_poll or default_poll
     if "direct" in (args.tx_poll, args.rx_poll) and not supports_direct:
@@ -352,6 +355,8 @@ def resolve(args) -> list[str]:
         args.rx_depth = args.rx_depth or min([rx_limit] + [r.num_bufs for r in args.rx_mr or ()])
     else:
         args.rx_depth = args.rx_depth or 1
+        if args.roce and len(args.roles) * args.queues * (args.rx_depth + 1) > ROCE_BURST_SLOTS:
+            raise ConfigError("RoCE latency receive depth exceeds the shared burst pool budget")
 
     default_kind = ("huge" if args.engine == "dpdk" else
                     "host_pinned" if (args.raw or args.roce) else "host")
@@ -522,9 +527,10 @@ def build_config(args, case: int, *, hardware: bool, rtt: bool) -> dict:
                         q["timeout_us"] = 100
                 section = intf.setdefault(direction, {"queues": []})
                 section["queues"].append(q)
-                if direction == "tx" and hardware and args.raw:
+                if direction == "tx" and hardware and (args.raw or args.roce):
                     # The accurate-send CQ selection puts TX in the same packed
-                    # wall-clock format as RX. Perftest sends without WAIT WQEs.
+                    # wall-clock format as RX for both raw ibverbs and RoCE.
+                    # Perftest sends without WAIT WQEs.
                     section["accurate_send"] = True
                 if direction == "rx":
                     if hardware:
@@ -553,5 +559,5 @@ def build_config(args, case: int, *, hardware: bool, rtt: bool) -> dict:
                          "realtime_priority": args.realtime_priority or 0,
                          "timeout": args.timeout, "client_ip": args.client_address,
                          "server_ip": args.server_address, "tx_depth": args.tx_depth,
-                         "rx_depth": args.rx_depth if args.test == "bw" else 1,
+                         "rx_depth": args.rx_depth,
                          "lanes": lanes}}

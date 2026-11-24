@@ -51,6 +51,7 @@ struct FakeVerbs {
   bool supports_atomic_batch = false;
   int send_result = 0, recv_result = 0;
   int fail_send_after = -1;
+  int fail_recv_after = 0;
   uint32_t requested_inline = 0;
   int created_cqs = 0, destroyed_cqs = 0, fail_cq = -1;
   bool fail_qp = false;
@@ -302,27 +303,30 @@ struct FakeVerbs {
     if (!result) current->send_times.push_back(time);
     return result;
   }
-  static int post_recv(ibv_qp* qp, ibv_recv_wr* wr, ibv_recv_wr**) {
+  static int post_recv(ibv_qp* qp, ibv_recv_wr* wr, ibv_recv_wr** bad) {
     std::lock_guard<std::mutex> lock(current->mutex);
     const bool ud = qp->qp_type == IBV_QPT_UD;
-    require((ud && wr->num_sge == 2 && wr->sg_list[0].length == sizeof(ibv_grh)) ||
-                (wr->num_sge == 1 && wr->sg_list) || (wr->num_sge == 0 && !wr->sg_list),
-            "incorrect RECEIVE encoding");
-    if (current->recv_result) {
-      return current->recv_result;
+    for (int ordinal = 0; wr; wr = wr->next, ++ordinal) {
+      require((ud && wr->num_sge == 2 && wr->sg_list[0].length == sizeof(ibv_grh)) ||
+                  (wr->num_sge == 1 && wr->sg_list) || (wr->num_sge == 0 && !wr->sg_list),
+              "incorrect RECEIVE encoding");
+      if (current->recv_result && ordinal == current->fail_recv_after) {
+        if (bad) *bad = wr;
+        return current->recv_result;
+      }
+      current->last_receive_id = wr->wr_id;
+      if (current->auto_complete) {
+        ibv_wc wc{};
+        wc.wr_id = wr->wr_id;
+        wc.status = IBV_WC_SUCCESS;
+        wc.opcode = IBV_WC_RECV;
+        wc.byte_len = ud            ? sizeof(ibv_grh) + wr->sg_list[1].length
+                      : wr->num_sge ? wr->sg_list->length
+                                    : 0;
+        current->rx_completions.push_back(wc);
+      }
+      ++current->receives;
     }
-    current->last_receive_id = wr->wr_id;
-    if (current->auto_complete) {
-      ibv_wc wc{};
-      wc.wr_id = wr->wr_id;
-      wc.status = IBV_WC_SUCCESS;
-      wc.opcode = IBV_WC_RECV;
-      wc.byte_len = ud            ? sizeof(ibv_grh) + wr->sg_list[1].length
-                    : wr->num_sge ? wr->sg_list->length
-                                  : 0;
-      current->rx_completions.push_back(wc);
-    }
-    ++current->receives;
     return 0;
   }
   static int modify_qp(ibv_qp*, ibv_qp_attr*, int) {
@@ -496,6 +500,55 @@ class RdmaEnginePollingTestPeer {
     engine.initialized_ = false;
     Ring::free(tx_ring);
     Ring::free(rx_ring);
+  }
+
+  void bulk_repost() {
+    engine.initialize_progress(false, &params);
+    engine.connection_params_[&id] = &params;
+    require(engine.publish_direct(&params), "bulk receive state was not published");
+    fake.auto_complete = true;
+    auto connection = reinterpret_cast<uintptr_t>(&id);
+    std::array<BurstParams, 3> metadata{};
+    std::array<void*, 3> data{};
+    std::array<uint32_t, 3> lengths{};
+    std::array<BurstParams*, 3> completions{};
+    for (size_t i = 0; i < metadata.size(); ++i) {
+      auto& burst = metadata[i];
+      data[i] = reinterpret_cast<void*>(4096 + i * 64);
+      require(engine.rdma_set_header(&burst, RDMAOpCode::RECEIVE, connection, false, 1, i,
+                                     "data") == Status::SUCCESS,
+              "bulk receive header");
+      burst.pkts[0] = &data[i];
+      burst.pkt_lens[0] = &lengths[i];
+      lengths[i] = 64;
+      require(engine.send_tx_burst(&burst) == Status::SUCCESS, "bulk receive prime");
+    }
+    fake.rx_completions.front().byte_len = 32;
+    size_t count = 0;
+    require(engine.rdma_poll_receive_batch(connection, completions.data(), 3, &count) ==
+                    Status::SUCCESS &&
+                count == 3 && fake.rx_polls == 1 && lengths[0] == 32,
+            "bulk receive polling");
+    std::array<BurstParams*, 2> repeated{completions[0], completions[0]};
+    require(engine.rdma_repost_receive_batch(connection, repeated.data(), 2, &count) ==
+                    Status::INVALID_PARAMETER &&
+                count == 0,
+            "bulk receive rejects duplicate buffers");
+    fake.recv_result = ENOMEM;
+    fake.fail_recv_after = 1;
+    require(engine.rdma_repost_receive_batch(connection, completions.data(), 3, &count) ==
+                    Status::GENERIC_FAILURE &&
+                count == 1,
+            "bulk receive accepted prefix");
+    fake.recv_result = 0;
+    require(engine.rdma_repost_receive_batch(connection, completions.data() + 1, 2, &count) ==
+                    Status::SUCCESS &&
+                count == 2,
+            "bulk receive suffix remains caller-owned");
+    require(engine.rdma_poll_receive_batch(connection, completions.data(), 3, &count) ==
+                    Status::SUCCESS &&
+                count == 3 && lengths[0] == 64,
+            "bulk repost restored the original receive capacity");
   }
 
   void tx_timestamps(bool server, RDMAOpCode operation, bool empty = false) {
@@ -2108,6 +2161,8 @@ int main() {
                                                       daqiri::RDMATransportMode::RC, false);
         unsupported.tx_timestamps(false, daqiri::RDMAOpCode::SEND);
       }
+    daqiri::RdmaEnginePollingTestPeer bulk(true, true);
+    bulk.bulk_repost();
     std::cout << "PASS: RDMA direct/indirect RX/TX, inline selection, buffer strides, and "
                  "completions\n";
     return 0;

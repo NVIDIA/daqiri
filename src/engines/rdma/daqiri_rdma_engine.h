@@ -192,6 +192,10 @@ class RdmaEngine : public Engine {
     return Status::NOT_SUPPORTED;
   };
   Status get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) override;
+  Status rdma_poll_receive_batch(uintptr_t conn_id, BurstParams** bursts, size_t capacity,
+                                 size_t* received) override;
+  Status rdma_repost_receive_batch(uintptr_t conn_id, BurstParams* const* bursts, size_t count,
+                                   size_t* posted) override;
   Status set_packet_tx_time(BurstParams* burst, int idx, uint64_t timestamp) override;
   void free_rx_metadata(BurstParams* burst) override;
   void free_tx_metadata(BurstParams* burst) override;

@@ -31,13 +31,16 @@
 
 #include "raw_bench_common.h"
 #include <daqiri/daqiri.h>
+#include "rdma_receive_batch.h"
 
 namespace {
 
 volatile std::sig_atomic_t g_stop_requested = 0;
 
 void signal_handler(int signum) {
-  if (signum == SIGINT) { g_stop_requested = 1; }
+  if (signum == SIGINT) {
+    g_stop_requested = 1;
+  }
 }
 
 struct RdmaBenchConfig {
@@ -48,12 +51,14 @@ struct RdmaBenchConfig {
   int message_size = 1024;
   int tx_depth = 128;
   int rx_depth = 512;
+  int batch_size = 1;
   std::string server_address = "10.100.1.1";
   std::string client_address = "10.100.4.1";
   uint16_t server_port = 4096;
 };
 
 struct RdmaWorkerStats {
+  bool failed = false;
   uint64_t send_completions = 0;
   uint64_t recv_completions = 0;
   uint64_t send_bytes = 0;
@@ -72,8 +77,16 @@ RdmaBenchConfig parse_rdma_cfg(const YAML::Node& node) {
   cfg.message_size = node["message_size"].as<int>(cfg.message_size);
   cfg.tx_depth = node["tx_depth"].as<int>(cfg.tx_depth);
   cfg.rx_depth = node["rx_depth"].as<int>(cfg.rx_depth);
-  if (cfg.tx_depth < 1) { cfg.tx_depth = 1; }
-  if (cfg.rx_depth < 1) { cfg.rx_depth = 1; }
+  cfg.batch_size = node["batch_size"].as<int>(cfg.batch_size);
+  if (cfg.batch_size < 1 || cfg.batch_size > 1024) {
+    throw std::runtime_error("rdma_bench batch_size must be between 1 and 1024");
+  }
+  if (cfg.tx_depth < 1) {
+    cfg.tx_depth = 1;
+  }
+  if (cfg.rx_depth < 1) {
+    cfg.rx_depth = 1;
+  }
   cfg.server_address = node["server_address"].as<std::string>(cfg.server_address);
   cfg.client_address = node["client_address"].as<std::string>(cfg.client_address);
   cfg.server_port = node["server_port"].as<uint16_t>(cfg.server_port);
@@ -84,8 +97,7 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
                  std::atomic<bool>& stop, RdmaWorkerStats& stats,
                  daqiri::bench::BenchWorkload workload, int workload_gemm_dim,
                  int workload_sync_interval, int workload_max_inflight, int workload_fft_len) {
-  const char *thread_name =
-      cfg.server ? "rdma_bench_server" : "rdma_bench_client";
+  const char* thread_name = cfg.server ? "rdma_bench_server" : "rdma_bench_client";
   if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, thread_name)) {
     stop.store(true);
     return;
@@ -134,9 +146,8 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
   // the event pool (kMaxWorkloadInflight -- else record_event() starves at the cap
   // and falls back to a per-message sync) and to rx_depth (else we would block
   // reposting more receives than are posted).
-  size_t inflight_cap = workload_max_inflight > 0
-                            ? static_cast<size_t>(workload_max_inflight)
-                            : std::min<size_t>(cfg.rx_depth / 2, 32);
+  size_t inflight_cap = workload_max_inflight > 0 ? static_cast<size_t>(workload_max_inflight)
+                                                  : std::min<size_t>(cfg.rx_depth / 2, 32);
   inflight_cap =
       std::min<size_t>(inflight_cap, static_cast<size_t>(daqiri::bench::kMaxWorkloadInflight));
   inflight_cap = std::min<size_t>(inflight_cap, static_cast<size_t>(cfg.rx_depth));
@@ -170,6 +181,7 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
   std::string send_mr = cfg.server ? "DATA_TX_GPU_SERVER" : "DATA_TX_GPU_CLIENT";
   std::string recv_mr = cfg.server ? "DATA_RX_GPU_SERVER" : "DATA_RX_GPU_CLIENT";
   bool recv_primed = !cfg.receive;
+  bool bulk_receive = cfg.receive && !cfg.send && !run_workload;
 
   // After `stop` is signalled, drain in-flight completions for a short window so
   // pending SENDs land cleanly instead of getting WR_FLUSH_ERR on disconnect.
@@ -182,11 +194,17 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
       drain_deadline = std::chrono::steady_clock::now() + drain_window;
     }
     if (stopped) {
-      if (outstanding_send == 0 && outstanding_recv == 0) { break; }
-      if (std::chrono::steady_clock::now() >= drain_deadline) { break; }
+      if (outstanding_send == 0 && outstanding_recv == 0) {
+        break;
+      }
+      if (std::chrono::steady_clock::now() >= drain_deadline) {
+        break;
+      }
     }
 
-    if (conn_id == 0 && stopped) { break; }
+    if (conn_id == 0 && stopped) {
+      break;
+    }
     if (conn_id == 0) {
       daqiri::Status s = daqiri::Status::GENERIC_FAILURE;
       if (cfg.server) {
@@ -204,12 +222,18 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
 
     auto post_req = [&](int& outstanding, int depth, uint64_t& wr_id, daqiri::RDMAOpCode op,
                         const std::string& mr_name) -> bool {
-      if (outstanding >= depth) { return false; }
+      if (outstanding >= depth) {
+        return false;
+      }
+      const int count =
+          op == daqiri::RDMAOpCode::SEND ? std::min(cfg.batch_size, depth - outstanding) : 1;
 
       auto* msg = daqiri::create_tx_burst_params();
-      if (msg == nullptr) { return false; }
+      if (msg == nullptr) {
+        return false;
+      }
 
-      if (daqiri::rdma_set_header(msg, op, conn_id, cfg.server, 1, wr_id, mr_name) !=
+      if (daqiri::rdma_set_header(msg, op, conn_id, cfg.server, count, wr_id, mr_name) !=
           daqiri::Status::SUCCESS) {
         daqiri::free_tx_metadata(msg);
         return false;
@@ -225,16 +249,20 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
         return false;
       }
 
-      if (daqiri::set_packet_lengths(msg, 0, {cfg.message_size}) != daqiri::Status::SUCCESS) {
-        daqiri::free_tx_burst(msg);
+      for (int i = 0; i < count; ++i) {
+        if (daqiri::set_packet_lengths(msg, i, {cfg.message_size}) != daqiri::Status::SUCCESS) {
+          daqiri::free_tx_burst(msg);
+          return false;
+        }
+      }
+      if (daqiri::send_tx_burst(msg) != daqiri::Status::SUCCESS) {
         return false;
       }
-      if (daqiri::send_tx_burst(msg) != daqiri::Status::SUCCESS) { return false; }
-      outstanding++;
-      wr_id++;
+      outstanding += count;
+      wr_id += count;
       // Only meter actual byte transmissions (SENDs), not RECEIVE-side posts.
       if (op == daqiri::RDMAOpCode::SEND) {
-        pacer.wait_for_bytes(static_cast<size_t>(cfg.message_size), stop);
+        pacer.wait_for_bytes(static_cast<size_t>(cfg.message_size) * count, stop);
       }
       return true;
     };
@@ -255,7 +283,9 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
         if (refill_receives()) {
           idle_spins = 0;
         } else {
-          if (++idle_spins > 100) { break; }
+          if (++idle_spins > 100) {
+            break;
+          }
           std::this_thread::sleep_for(std::chrono::microseconds(100));
         }
       }
@@ -264,17 +294,43 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
 
     bool posted_work = stopped ? false : refill_receives();
     bool got_completion = false;
-    while (true) {
+    if (bulk_receive) {
+      daqiri::bench::RdmaReceiveBatch batch;
+      const auto status =
+          daqiri::bench::recycle_rdma_receives(conn_id, cfg.message_size, !stopped, batch);
+      if (status == daqiri::Status::NOT_SUPPORTED) {
+        bulk_receive = false;
+      } else {
+        outstanding_recv -= static_cast<int>(batch.completed - batch.reposted);
+        stats.recv_completions += batch.valid;
+        stats.recv_bytes += batch.valid * static_cast<uint64_t>(cfg.message_size);
+        got_completion = batch.completed != 0;
+        if (!stopped &&
+            ((status != daqiri::Status::SUCCESS && status != daqiri::Status::NOT_READY) ||
+             batch.valid != batch.completed)) {
+          std::cerr << "RDMA bulk receive failed on " << thread_name << '\n';
+          stats.failed = true;
+          stop.store(true);
+          break;
+        }
+      }
+    }
+    while (!bulk_receive) {
       daqiri::BurstParams* completion = nullptr;
       const auto completion_status = daqiri::get_rx_burst(&completion, conn_id, cfg.server);
-      if (completion_status != daqiri::Status::SUCCESS || completion == nullptr) { break; }
+      if (completion_status != daqiri::Status::SUCCESS || completion == nullptr) {
+        break;
+      }
 
       got_completion = true;
       const auto opcode = daqiri::rdma_get_opcode(completion);
       if (opcode == daqiri::RDMAOpCode::SEND && outstanding_send > 0) {
-        outstanding_send--;
-        stats.send_completions++;
-        stats.send_bytes += static_cast<uint64_t>(cfg.message_size);
+        const auto count = completion->transport_hdr.num_pkts;
+        outstanding_send -= static_cast<int>(count);
+        if (completion->transport_hdr.status == daqiri::Status::SUCCESS) {
+          stats.send_completions += count;
+          stats.send_bytes += count * static_cast<uint64_t>(cfg.message_size);
+        }
       } else if (opcode == daqiri::RDMAOpCode::RECEIVE && outstanding_recv > 0) {
         outstanding_recv--;
         stats.recv_completions++;
@@ -319,12 +375,13 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
       daqiri::free_tx_burst(completion);
     }
 
-    if (!stopped) { posted_work = refill_receives() || posted_work; }
+    if (!stopped) {
+      posted_work = refill_receives() || posted_work;
+    }
     const bool local_receive_window_ready = !cfg.receive || outstanding_recv > 0;
     if (!stopped && cfg.send && local_receive_window_ready) {
-      while (outstanding_send < cfg.tx_depth &&
-             post_req(outstanding_send, cfg.tx_depth, send_wr_id, daqiri::RDMAOpCode::SEND,
-                      send_mr)) {
+      while (outstanding_send < cfg.tx_depth && post_req(outstanding_send, cfg.tx_depth, send_wr_id,
+                                                         daqiri::RDMAOpCode::SEND, send_mr)) {
         posted_work = true;
       }
     }
@@ -337,7 +394,7 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
       // receive path already reclaims finished GEMMs on every message, so here we just
       // keep polling get_rx_burst (cheap, no CUDA) for the next completion, and back
       // off only when there is genuinely nothing in flight.
-      if (held_recv.empty()) {
+      if (held_recv.empty() && (stopped || (outstanding_send == 0 && outstanding_recv == 0))) {
         std::this_thread::sleep_for(std::chrono::microseconds(100));
       }
     }
@@ -405,7 +462,7 @@ int main(int argc, char** argv) {
       run_client = true;
       client_cfg = parse_rdma_cfg(root["rdma_bench_client"]);
     }
-  } catch (const std::exception &e) {
+  } catch (const std::exception& e) {
     std::cerr << "Invalid benchmark config: " << e.what() << "\n";
     daqiri::shutdown();
     return 1;
@@ -430,39 +487,42 @@ int main(int argc, char** argv) {
 
   std::signal(SIGINT, signal_handler);
   auto start = std::chrono::steady_clock::now();
-  while (!g_stop_requested) {
+  while (!g_stop_requested && !stop.load()) {
     if (run_seconds > 0) {
       const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
           std::chrono::steady_clock::now() - start);
-      if (elapsed.count() >= run_seconds) { break; }
+      if (elapsed.count() >= run_seconds) {
+        break;
+      }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
   stop.store(true);
 
-  if (server_thread.joinable()) { server_thread.join(); }
-  if (client_thread.joinable()) { client_thread.join(); }
+  if (server_thread.joinable()) {
+    server_thread.join();
+  }
+  if (client_thread.joinable()) {
+    client_thread.join();
+  }
 
   const double secs =
-      std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
-          .count();
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 
   if (run_server) {
     std::cout << "Server complete: send_completions=" << server_stats.send_completions
               << " recv_completions=" << server_stats.recv_completions
               << " send_bytes=" << server_stats.send_bytes
-              << " recv_bytes=" << server_stats.recv_bytes
-              << " seconds=" << secs << '\n';
+              << " recv_bytes=" << server_stats.recv_bytes << " seconds=" << secs << '\n';
   }
   if (run_client) {
     std::cout << "Client complete: send_completions=" << client_stats.send_completions
               << " recv_completions=" << client_stats.recv_completions
               << " send_bytes=" << client_stats.send_bytes
-              << " recv_bytes=" << client_stats.recv_bytes
-              << " seconds=" << secs << '\n';
+              << " recv_bytes=" << client_stats.recv_bytes << " seconds=" << secs << '\n';
   }
 
   daqiri::print_stats();
   daqiri::shutdown();
-  return 0;
+  return server_stats.failed || client_stats.failed ? 1 : 0;
 }
