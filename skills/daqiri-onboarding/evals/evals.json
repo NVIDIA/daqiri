@@ -2,107 +2,74 @@
   "skill_name": "daqiri-onboarding",
   "evals": [
     {
-      "id": "01-concept",
-      "prompt": "Explain how DAQIRI moves incoming data into GPU-accessible memory on DGX Spark, and how that differs from a discrete-GPU deployment. I only need an explanation.",
-      "expected_output": "Explain a concept: Use the matching DAQIRI documentation. Explain the GB10 host_pinned shared-memory path accurately. Distinguish the discrete-GPU device-memory path. Do not start setup or a benchmark.",
-      "expected_skill": "daqiri-onboarding",
-      "assertions": [
-        "Use the matching DAQIRI documentation.",
-        "Explain the GB10 host_pinned shared-memory path accurately.",
-        "Distinguish the discrete-GPU device-memory path.",
-        "Do not start setup or a benchmark."
-      ]
+      "id": "udp-flow-mismatch",
+      "prompt": "A DAQIRI raw-ibverbs receiver matches UDP destination 4557; the fixed instrument sends to 4556. TX and NIC counters increase by 10007, but the RX worker/application receive zero. Queue, memory and polling settings are otherwise valid. Explain the smallest repair and verification plan. Do not run traffic or change the sender.",
+      "expected_output": "Change only the receive UDP match and dependent references if any. Distinguish parser acceptance, steering, worker/application delivery and payload identity. The counts do not establish physical packet loss or a buffer-capacity cause."
     },
     {
-      "id": "02-resume-config",
-      "prompt": "I already have this compatible DAQIRI runtime. Generate a raw Ethernet configuration transmitting on det1 and receiving on det2, using the two test ports described in eval-input/context.md, and validate it. Save a new file under results and stop before traffic.",
-      "expected_output": "Resume an existing setup: Reuse the provided compatible runtime. Use observed or supplied topology inputs. Generate a fresh configuration through the existing generator. Run the native validator and report its exit status. Do not start traffic or overwrite inputs.",
-      "expected_skill": "daqiri-onboarding",
-      "assertions": [
-        "Reuse the provided compatible runtime.",
-        "Use observed or supplied topology inputs.",
-        "Generate a fresh configuration through the existing generator.",
-        "Run the native validator and report its exit status.",
-        "Do not start traffic or overwrite inputs."
-      ]
+      "id": "rx-buffer-ownership",
+      "prompt": "In an ordinary non-reordered raw-ibverbs loop, get_rx_burst succeeds, consume_sync(burst) completes without retaining pointers, then free_rx_burst(burst) is called. Reception eventually starves. A colleague suggests doubling num_bufs. Give the minimal supported repair and a bounded verification plan; this is a code-review scenario, not an observed incident.",
+      "expected_output": "Packet storage/strides and burst metadata have separate ownership. Release both exactly once after consumption, for example with free_all_packets_and_burst_rx. A larger finite pool only delays unreleased-storage exhaustion. Do not invent observed starvation counters."
     },
     {
-      "id": "03-repair-config",
-      "prompt": "eval-input/invalid-raw.yaml fails DAQIRI validation. Diagnose and fix it in a new file under results without changing the original. Preserve its existing one-port hardware-loopback layout, queue/action mappings and unrelated settings. Stop after validating the corrected file.",
-      "expected_output": "Repair an invalid configuration: Run the native validator and identify the duplicate flow-ID failure. Give both intended flows positive unique IDs. Preserve the one-port hardware-loopback layout, queue IDs, queue-action targets and all unrelated settings. Leave the original fixture unchanged. Validate the corrected copy and report the actual result.",
-      "expected_skill": "daqiri-onboarding",
-      "assertions": [
-        "Run the native validator and identify the duplicate flow-ID failure.",
-        "Give both intended flows positive unique IDs.",
-        "Preserve the one-port hardware-loopback layout, queue IDs, queue-action targets and all unrelated settings.",
-        "Leave the original fixture unchanged.",
-        "Validate the corrected copy and report the actual result."
-      ]
+      "id": "throughput-evidence",
+      "prompt": "Interpret this synthetic DAQIRI measurement: two independent 100GbE receiving links use host_pinned memory on Spark UMA. Over the same one-second steady interval rx_bytes_phy increases by 12072500000 and 12125000000. TX and application counts match; payload identities were not checked. RX lives 32 seconds, including waiting/draining, while active sending lasts 20 seconds. Report per-link/aggregate throughput and evidence limits.",
+      "expected_output": "Report 96.58 and 97.00 Gb/s, aggregate 193.58 Gb/s from the supplied PHY-counter interval. Count each receiving link once. Identify host-pinned UMA rather than device-memory payload placement; total RX lifetime is not the active interval. Matching counts do not certify unique delivery or losslessness."
     },
     {
-      "id": "04-diagnose-log",
-      "prompt": "The saved run in eval-input/saved-run.log reported no-free-buffer errors. Explain what the evidence shows and what to check next. This is a diagnostic discussion; do not start another benchmark.",
-      "expected_output": "Diagnose saved output: Read the supplied saved log and relevant DAQIRI guidance. Explain buffer ownership and recycling as relevant hypotheses. Separate confirmed observations from unproven root causes. Treat saved evidence as historical, not a fresh run or reliable throughput measurement. Do not start traffic or change host settings.",
-      "expected_skill": "daqiri-onboarding",
-      "assertions": [
-        "Read the supplied saved log and relevant DAQIRI guidance.",
-        "Explain buffer ownership and recycling as relevant hypotheses.",
-        "Separate confirmed observations from unproven root causes.",
-        "Treat saved evidence as historical, not a fresh run or reliable throughput measurement.",
-        "Do not start traffic or change host settings."
-      ]
+      "id": "finite-tail",
+      "prompt": "A finite DAQIRI raw-ibverbs run accepts 10007 TX packets and records 10007 NIC/worker packets. With batch_size 64 and timeout_us 0, the application receives 9984 unique packets, missing the final 23 IDs. An otherwise matched 1000-us-timeout run receives all 10007 and compares 10247168 payload bytes successfully. Explain the supported diagnosis and a bounded confirmation plan.",
+      "expected_output": "Account for 10007 = 156*64 + 23 and diagnose partial-burst tail retention before shutdown. Recommend finite timeout plus explicit drain/completion criteria. Separate this application deficit from unproved physical loss, corruption or universal losslessness; do not prescribe blanket pool increases."
     },
     {
-      "id": "05-missing-hardware",
-      "prompt": "Run my first DAQIRI raw Ethernet benchmark in this runtime. Establish whether its prerequisites are available and report the outcome.",
-      "expected_output": "Handle missing hardware: Inspect usable NIC/runtime prerequisites. Recognize that the isolated runtime has no usable raw/RDMA device. Report the missing prerequisite instead of claiming a hardware benchmark passed. Offer an appropriate next step without substituting a software test as NIC evidence.",
-      "expected_skill": "daqiri-onboarding",
-      "assertions": [
-        "Inspect usable NIC/runtime prerequisites.",
-        "Recognize that the isolated runtime has no usable raw/RDMA device.",
-        "Report the missing prerequisite instead of claiming a hardware benchmark passed.",
-        "Offer an appropriate next step without substituting a software test as NIC evidence."
-      ]
+      "id": "simple-port-edit",
+      "prompt": "A known-good two-link DAQIRI RX YAML uses UDP source/destination 4556. Only destination changes to 4778 on both links. State the exact field changes and validation/smoke commands for solution/receiver.yaml, using $DAQIRI_EVAL_VALIDATOR and /opt/daqiri/bin/daqiri_bench_raw_gpudirect. Runtime is ready. Do not run traffic; only provide the handoff.",
+      "expected_output": "Preserve source 4556 and all queue/memory/polling values; change both RX destination matches. Use the prepared native validator and propose the raw benchmark with --seconds 10. Avoid unnecessary generation, rebuild, installation or discovery, and do not claim delivery without the external sender."
     },
     {
-      "id": "06-negative-cuda",
-      "prompt": "Review eval-input/matmul.cu and suggest concrete optimizations for that standalone CUDA matrix-multiplication kernel. Keep the answer focused on CUDA; no execution is needed.",
-      "expected_output": "Stay out of unrelated work: Discuss concrete CUDA memory/coalescing/tiling improvements. Preserve matrix-multiplication semantics. Do not activate DAQIRI onboarding or redirect into DAQIRI setup. Do not start traffic or hardware setup.",
-      "expected_skill": null,
-      "assertions": [
-        "Discuss concrete CUDA memory/coalescing/tiling improvements.",
-        "Preserve matrix-multiplication semantics.",
-        "Do not activate DAQIRI onboarding or redirect into DAQIRI setup.",
-        "Do not start traffic or hardware setup."
-      ]
+      "id": "new-profile-generation",
+      "prompt": "Two separate Spark UMA hosts need DAQIRI raw ibverbs TX-only and RX-only profiles, including benchmark sections. No full YAML exists. Supplied deployment facts will provide local/peer endpoints, CPU assignments and packet geometry. Describe the repository authoring workflow, memory choice, required inputs and validation boundaries. Do not invent missing endpoint values or run traffic.",
+      "expected_output": "Use the existing raw-pair generator and matching help/docs when the required facts are available; do not introduce a parallel generator. Each role configures its local NIC rather than its peer as local. Use host_pinned on Spark UMA. Validate both outputs natively and distinguish acceptance from hardware/delivery proof."
     },
     {
-      "id": "07-raw-smoke",
-      "prompt": "Use the prepared DAQIRI setup and eval-input/raw-hw-loopback.yaml to run a bounded raw Ethernet smoke test. Keep it to one run of at most five seconds, save fresh evidence under results, and explain what the result proves.",
-      "expected_output": "First raw Ethernet run: Validate the concrete configuration before traffic. Execute the actual raw benchmark with a bounded duration. Use fresh application output and relevant counters to establish delivery. Accurately label hardware loopback rather than a cable/wire result. Do not report throughput from packet counts divided by process wall time. Preserve host configuration and input files.",
-      "expected_skill": "daqiri-onboarding",
-      "assertions": [
-        "Validate the concrete configuration before traffic.",
-        "Execute the actual raw benchmark with a bounded duration.",
-        "Use fresh application output and relevant counters to establish delivery.",
-        "Accurately label hardware loopback rather than a cable/wire result.",
-        "Do not report throughput from packet counts divided by process wall time.",
-        "Preserve host configuration and input files."
-      ]
+      "id": "explicit-template-rendering",
+      "prompt": "An existing valid DAQIRI template contains placeholders for master_core and two interface addresses, plus application.io.run_label, a boolean true and array [2,5,11]. The user explicitly requests repository rendering with master_core 9, supplied concrete BDF strings and a run-label override at its existing path. Explain the workflow and preservation checks. Do not claim tools were executed.",
+      "expected_output": "Use the existing gen_daqiri_config.py render workflow with existing-path JSON Pointer overrides, preserving numeric/string types, application sections and list order. Reject unknown override paths and unresolved placeholders. Validate the concrete output; a handwritten serializer or blanket regeneration does not fulfill the requested rendering workflow."
     },
     {
-      "id": "08-tcp-wire",
-      "prompt": "Run a bounded DAQIRI TCP smoke test over the prepared cabled path. Use eval-input/tcp-tx.yaml and tcp-rx.yaml. The eval-peer helper controls the dedicated receiver on the peer. Save fresh evidence under results and explain what was verified.",
-      "expected_output": "First TCP run: Verify the route uses the test NIC instead of loopback. Validate the role configurations with the native validator. Start or verify the dedicated receiver before starting the sender. Run the actual TCP client with a bounded duration and pacing. Capture nonzero delivery and physical-interface evidence. Report limitations accurately and stop the owned receiver.",
-      "expected_skill": "daqiri-onboarding",
-      "assertions": [
-        "Verify the route uses the test NIC instead of loopback.",
-        "Validate the role configurations with the native validator.",
-        "Start or verify the dedicated receiver before starting the sender.",
-        "Run the actual TCP client with a bounded duration and pacing.",
-        "Capture nonzero delivery and physical-interface evidence.",
-        "Report limitations accurately and stop the owned receiver."
-      ]
+      "id": "direct-polling",
+      "prompt": "Assess conversion of ordinary raw-ibverbs indirect TX/RX queues to direct polling for latency. Explain worker-only fields, TX submission size, queue ownership, progress, acquisition failures, send status handling and a bounded comparison. No reorder is configured. Give a plan only; no traffic or measured speedup is available.",
+      "expected_output": "Remove forbidden worker-only direct-queue fields and use one packet per direct TX submission. One caller owns/progresses each queue. Do not use a burst after failed acquisition. send_tx_burst SUCCESS and NO_SPACE_AVAILABLE consume it; other send failures retain ownership. Release RX storage after all consumers finish. Compare delivered/completed traffic, latency and CPU cost without promising improvement."
+    },
+    {
+      "id": "reorder-consumer-stalls",
+      "prompt": "A Spark UMA receiver uses GPU software reorder with host_pinned source/output regions. Its application spends 2.5 ms consuming each aggregate before requesting another. Ordering must remain. A colleague proposes changing only RX polling to direct. Assess this proposal and explain a supported progress/ownership plan without running traffic.",
+      "expected_output": "Reject the direct toggle for the retained reorder target. Keep supported indirect GPU reorder and use bounded decoupling or shorter processing. Explain finite backlog/backpressure; do not promise unlimited progress. Preserve borrowed metadata/output until GPU and all downstream consumers finish, then release once."
+    },
+    {
+      "id": "cyclic-hardware-reorder",
+      "prompt": "An IGX dGPU receiver has positive current and maximum parser/RX-steering capability on its selected adapter. Its device-memory software reorder receives fixed 1024-byte payloads with cyclic sequence values 0..127, 32 packets per aggregate and four outputs. Assess hardware direct placement, necessary configuration changes, remaining host work and safe output lifetime. This is a configuration discussion, not a live test.",
+      "expected_output": "The bounded cyclic domain and qualified selected adapter support considering hw reorder with cyclic_sequence true while preserving geometry, UDP gate, indirect target and device/GPU memory semantics. Explain host completion/timeout/publication work, GPU visibility and whole-output credit release. Capability/config checks are not new integrity or performance evidence."
+    },
+    {
+      "id": "monotonic-hardware-reorder",
+      "prompt": "The same capable IGX dGPU receiver instead receives an unrestricted monotonic 32-bit sequence. Sender protocol, firmware and finite output layout are fixed. Can hardware reorder replace GPU software reorder? Explain the supported fallback and verification boundaries; do not alter the sender or run traffic.",
+      "expected_output": "Reject finite hardware destination addressing for that unchanged unrestricted sequence. Field width alone does not imply a finite cycle. Do not mask, truncate, wrap or reinterpret it. Keep supported ibverbs GPU software reorder with device source/output and safe output lifetime; enabling firmware does not solve this protocol constraint."
+    },
+    {
+      "id": "incomplete-hardware-aggregates",
+      "prompt": "A finite hardware-reorder check intentionally omits sequence values 5 and 70 from 0..127, with four 32-slot device aggregates and 1024-byte payloads. Passthrough returns four aggregates: batches 0/2 have missing bitmaps 32/64 and timeout flags; 126 valid payloads compare. Drop returns two complete aggregates/64 valid payloads although NIC placements total126. Reconcile accounting and safe GPU consumption. Does hardware reorder require complete-only output?",
+      "expected_output": "Passthrough has 128 slots but 126 valid packets and 129024 compared bytes; skip holes. Drop discards 62 arrived packets in two incomplete aggregates, returns 64 packets/65536 bytes, and does not make the two source omissions transport losses. Finite timeout can publish incomplete outputs. Retain bitmap/output through GPU completion and release whole aggregates; held credits and ring revisits are finite."
+    },
+    {
+      "id": "pending-firmware-activation",
+      "prompt": "Synthetic same-adapter capture: PROG_PARSE_GRAPH Current=0/Next Boot=1; FLEX_PARSER_PROFILE_ENABLE Current=0/Next Boot=4; maximum parser capability present but current parser capability absent. Hardware-reorder initialization fails. Explain the discrepancy and smallest activation/recheck plan. Do not execute settings, reset, reboot or traffic.",
+      "expected_output": "Desired supported settings are persisted but not effective. Use the documented supported activation boundary, then requery Current and effective parser/RX steering on the same adapter before retrying. Do not treat an asterisk or Next Boot as current capability, repeat saved settings blindly, or claim a real repaired host."
+    },
+    {
+      "id": "absent-hardware-capability",
+      "prompt": "A Spark UMA receiver fails hardware-reorder initialization. On the selected adapter both Current/NextBoot settings are disabled; maximum/current parser capability is absent, while the RX-steering query succeeds. Explain whether YAML or reboot alone is established to fix this, and give an immediate fallback and qualification plan. No settings changes or traffic are allowed.",
+      "expected_output": "Neither YAML nor reboot alone is proven sufficient: settings are not saved and effective/max parser capability is absent. Use supported ibverbs GPU software reorder with host_pinned source/output on Spark UMA. Qualify selected-adapter capability, supported settings and activation conditionally; do not permanently blacklist Spark or invent a firmware release that fixes it."
     }
   ]
 }

@@ -1,127 +1,44 @@
-# Skill Benchmark: daqiri-onboarding
+# DAQIRI onboarding skill benchmark
 
-> **Publication eligible**
+Self-assessed development comparison completed 2026-11-24. Publication validation
+and signing are separate from these historical measurements.
 
-## Publication Recommendation
+14 development scenarios x two arms x three attempts x two providers = 168 fresh
+sessions, 42 per provider/arm. Both arms shared source/docs and prepared native
+tools, with isolated sessions, counterbalanced order and natural skill discovery.
+Participant sessions had no GPU/NIC mappings or live traffic. Source revision:
+`2c315f1e6374d7cb9df8889d63bcb1a498fa2378`, plus the shared walkthrough correction.
 
-- Evaluation source: self-assessed
-- Quality assessment: SELF-ASSESSED
-- Reported execution: completed
-- Reported evaluation verdict: PASS
-- CI checks allow publication with self-assessed evaluation evidence.
-- CI did not run Tier 3. Scores, comparisons, and evaluation verdicts below are producer-reported. Scoring definitions reference Skill Evaluator 1.6.9 and do not set the CI publication gate.
+| Requested model (`xhigh`) | Material success: no skill -> skill | Tokens | Session time | Non-cache-read input + output |
+| --- | --- | ---: | ---: | ---: |
+| Codex `gpt-6.1-sol` | 42/42 -> 42/42 | -16.9% | -8.8% | -11.5% |
+| Claude `claude-opus-5-5` | 37/42 -> 41/42 | -43.8% | -27.4% | -26.6% |
 
-Scoring definitions below are those of Skill Evaluator 1.6.9; older reports may use different formulas. Supplied scores are displayed unchanged.
+Resource change is `100 * (sum(skill) / sum(no_skill) - 1)` over every attempt,
+including task failures and failed inner probes. Tokens are native final
+cache-inclusive input plus output, not monetary cost. Time includes CLI startup,
+provider waits and tools; preparation/grading/cleanup are excluded. Effort was
+not independently reported; Claude reported its requested model, Codex did not.
 
-## Evaluation Metadata
+Claude improves throughput/evidence interpretation (0/3 -> 2/3) and direct-polling
+ownership (1/3 -> 3/3); one skill-assisted answer still overclaims losslessness.
+Codex uses fewer tokens in 12/14 cases; routine editing uses 12.2% more and pending
+activation 16.9% more. Claude uses fewer tokens and less time in all 14 observed
+cells. All 24 generation/rendering sessions pass with required operations verified.
 
-- Skill: `daqiri-onboarding`
-- Validation status: `passed`
-- Evaluation date: 2026-11-09
-- Evaluator version: `daqiri-paired-cli-byoe-v4-external-minimal`
-- Agents: Codex (`gpt-6.1-sol`), Claude (`claude-opus-5-5`)
-- Tasks: 8 evaluation tasks (7 positive, 1 negative)
-- Dataset digest: not recorded (legacy or non-live result)
-- Attempts per task: 1
-- Environment: not recorded (legacy or non-live result)
-- Tier 2 evidence: required for publication
-- Tier 3 evidence: self-assessed; CI did not run live evaluation
+Grades were frozen before joining resources to conditions: 168 primary AI reviews,
+110 secondaries and 28 adjudications. A supplemental diagnostic census and
+materiality/common-versus-engine-validator clarifications preceded unblinding;
+these were not preregistered. Primary-only Claude success is 39/42 -> 42/42;
+final grading is 37/42 -> 41/42. Both-successful matched Claude pairs still save
+42.9% tokens and 27.6% time. No attempts were rerun/replaced; no infrastructure,
+authentication or quota failures occurred. AI judges can share errors and style
+can reveal treatment. Three repeats do not establish significance or all-prompt
+benefits; individual helper/fast-path contributions were not isolated.
 
-## Tier 1 LLM Provenance
-
-SkillSpector provider, model, analyzer revision, and determinism evidence retained for this scan.
-
-| Skill | Provider | Adapter | Analyzer | Model | Revision | Determinism |
-| --- | --- | --- | --- | --- | --- | --- |
-| daqiri-onboarding | nv_inference | openai | mcp_tool_poisoning | `aws/anthropic/bedrock-claude-opus-5-5` | `2.13.4` | nondeterministic / provider_defaults |
-| daqiri-onboarding | nv_inference | openai | semantic_developer_intent | `aws/anthropic/bedrock-claude-opus-5-5` | `2.13.4` | nondeterministic / provider_defaults |
-| daqiri-onboarding | nv_inference | openai | semantic_quality_policy | `aws/anthropic/bedrock-claude-opus-5-5` | `2.13.4` | nondeterministic / provider_defaults |
-| daqiri-onboarding | nv_inference | openai | semantic_security_discovery | `aws/anthropic/bedrock-claude-opus-5-5` | `2.13.4` | nondeterministic / provider_defaults |
-| daqiri-onboarding | nv_inference | openai | meta_analyzer | `aws/anthropic/bedrock-claude-opus-5-5` | `2.13.4` | nondeterministic / provider_defaults |
-
-- Controls for `daqiri-onboarding`: temperature=not set (source=provider_default, forwarded=no); seed=not set (source=unset, forwarded=no); reasoning_effort=not set (source=provider_default, forwarded=no)
-
-## What This Report Answers
-
-The three-tier evaluation checks whether the skill:
-
-- is safe to use;
-- produces correct answers;
-- is discovered and activated when needed;
-- helps the agent complete the user's goal and expected workflow; and
-- avoids wasted skill and tool usage.
-
-## Results at a Glance
-
-| Measure | Codex (Baseline → Skill Uplift) | Claude (Baseline → Skill Uplift) |
-|---|---:|---:|
-| Overall | 100.0% → 100.0% (±0.0 points) | 100.0% → 100.0% (±0.0 points) |
-| Security | 100.0% → 100.0% (±0.0 points) | 100.0% → 100.0% (±0.0 points) |
-| Correctness | 100.0% → 100.0% (±0.0 points) | 100.0% → 100.0% (±0.0 points) |
-| Discoverability | 100.0% — baseline ran, but no comparable score was available; uplift unavailable | 100.0% — baseline ran, but no comparable score was available; uplift unavailable |
-| Effectiveness | 100.0% → 100.0% (±0.0 points) | 100.0% → 100.0% (±0.0 points) |
-| Efficiency | Not available | Not available |
-
-**How to read this table:** baseline is the same task attempted without the target skill. Scores are rounded to one decimal; threshold-adjacent values use additional precision so their displayed band matches the verdict. Uplift is derived from those displayed scores and shown in percentage points.
-
-Example: `47.0% → 92.0% (+45.0 points)` means the skill-assisted run scored 92.0%, 45.0 percentage points above its 47.0% no-skill baseline.
-
-A partial dimension was calculated from only the available configured signals; review the detailed report before relying on it.
-
-## Tier Status
-
-| Tier | Purpose | Status | Evidence |
-|---|---|---|---|
-| Tier 1 | Static validation | **PASSED WITH OBSERVATIONS** | 11 validator(s); 13 finding(s) |
-| Tier 2 | Semantic deduplication | **PASSED** | 2 validator(s); 0 finding(s) |
-| Tier 3 | Self-assessed evaluation | **SELF-ASSESSED** | Reported execution: completed; CI did not run Tier 3 |
-
-Tier 3 validation was skipped and executed 0 checks.
-- CI did not run Tier 3; evaluation source: self-assessed.
-
-## Findings and Observations
-
-<details>
-<summary>Show detailed findings and successful checks</summary>
-
-- **MEDIUM** QUALITY/quality_correctness: SKILL_SPEC recommended field missing: 'metadata.author' (`skills/daqiri-onboarding/SKILL.md`)
-- **MEDIUM** QUALITY/quality_correctness: SKILL_SPEC recommended field missing: 'metadata.tags' (`skills/daqiri-onboarding/SKILL.md`)
-- **MEDIUM** QUALITY/quality_efficiency: Deeply nested references in onboarding-flow.md (`skills/daqiri-onboarding/SKILL.md`)
-- **MEDIUM** SCHEMA/body_recommended_section: Missing recommended section: '## Instructions' (`skills/daqiri-onboarding/SKILL.md`)
-- **MEDIUM** SCHEMA/body_recommended_section: Missing recommended section: '## Examples' (`skills/daqiri-onboarding/SKILL.md`)
-- 8 additional finding(s) are available in the full evaluation artifacts.
-
-</details>
-
-## Scoring Methodology
-
-<details>
-<summary>Show dimension definitions, source signals, and thresholds</summary>
-
-| Dimension | Question | Scored signals |
-|---|---|---|
-| Security | Is it safe to use? | `security` (100%) |
-| Correctness | Is the answer correct? | `accuracy` (100%) |
-| Discoverability | Was the right skill loaded when needed? | `skill_execution` (100%) |
-| Effectiveness | Did the skill help complete the task? | `goal_accuracy` (50%) + `behavior_check` (50%) |
-| Efficiency | Did it avoid wasted tool calls and token usage? | `skill_efficiency` (50%) + `token_efficiency` (50%) |
-
-- Dimension bands: PASS at 50% or above; NEUTRAL from 40% to below 50%; FAIL below 40%.
-- Overall Tier 3 lift: PASS at +5 points or more; FAIL at -10 points or less; values between those bands are NEUTRAL.
-- Reference quality rule (not the CI publication gate): PASS only when every configured dimension passes for at least one supported agent. Lift is reported as diagnostic evidence and does not override that reference quality rule.
-- The 100% attempt pass threshold is a separate per-task gate; it is not the dimension pass threshold.
-- Effectiveness is the equal-weight mean of goal completion (`goal_accuracy`) and expected workflow adherence (`behavior_check`).
-- Efficiency is 50% tool-call productivity (the backward-compatible `skill_efficiency` wire id) and 50% `token_efficiency`. Positive-case skill routing is scored under Discoverability, not Efficiency; a negative case without a routing target is N/A. N/A sources are omitted, remaining weights are renormalized, and the dimension is marked partial.
-
-Signals present in this run:
-
-- `assertion_pass_rate` (Assertion Pass Rate): additional evaluator signal.
-- `task_success` (Task Success): additional evaluator signal.
-- `scope_preservation` (Scope Preservation): additional evaluator signal.
-- `skill_activation_alignment` (Skill Activation Alignment): additional evaluator signal.
-
-</details>
-
-## Freshness
-
-Regenerate this benchmark when the skill, evaluation dataset, target agent/model, evaluator version, environment, or scoring policy changes.
+The full development dataset, fixtures and detailed reports are retained outside
+the distributed skill. `evals/evals.json` contains compact self-contained checks
+of these workflows; those rewritten checks have not been run in this benchmark.
+The numbers above describe the archived development campaign, not measurements
+of the compact publication dataset. No personal/local identifiers, credentials,
+operational inventories or raw execution traces are distributed.
