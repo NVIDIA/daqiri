@@ -452,7 +452,7 @@ rx:
 ```
 
 1. **`batch_size`**: Kept equal to `packets_per_batch` for the benchmark's aggregate accounting.
-2. **`timeout_us`**: Hardware reorder v1 emits complete batches only, so timeout flushing is disabled.
+2. **`timeout_us`**: This example uses `0` to wait for complete batches. A finite timeout can drop an incomplete aggregate or publish a fixed-size aggregate with missing-slot metadata according to `missing_action`; see [RX Reorder Configs](../api-reference/configuration.md#rx-reorder-configs) for details.
 
 **Flow `id` tags packets for the reorder config.** The reorder block selects packets to reorder by flow ID.
 
