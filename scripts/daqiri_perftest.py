@@ -665,6 +665,8 @@ def print_configuration(report):
                     print(f"                 {endpoint}")
                     raw_endpoints.add(endpoint)
             for direction in ("tx", "rx"):
+                if direction not in lane:
+                    continue
                 section = interface.get(direction, {})
                 for queue in section.get("queues", []):
                     if queue["id"] != lane["qid"]:

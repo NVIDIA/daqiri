@@ -451,6 +451,25 @@ def test_hardware_rtt_labels_reply_timestamp_in_reports(frontend, monkeypatch, c
     assert "HW RTT" in output and "0.080" in output
 
 
+def test_hardware_loopback_report_uses_each_lanes_direction(frontend, monkeypatch, capsys):
+    topology = importlib.import_module("daqiri_config.perftest")
+    interface = topology.Interface("p0", "0000:03:00.0", "02:00:00:00:00:01")
+    monkeypatch.setattr(topology, "resolve_interface", lambda *_, **__: interface)
+    args = frontend.parse_args(["lat", *RAW_IBVERBS, "--packet-size", "64"])
+    frontend.resolve(args)
+    latency = {"direction": "client->server", "queue": 0, "timeouts": 0, "probes": [[0, 100, 80]]}
+    rows, _, _ = frontend.collect(args, [{"role": "local", "latency": [latency]}], 64, False)
+    frontend.print_report({"settings": frontend.settings(args), "engine": "ibverbs", "role": "local",
+                           "cases": [{"size": 64, "measurements": rows, "participants": [
+                               {"role": "local", "daqiri_version": "test",
+                                "configuration": frontend.build_config(args, 0, hardware=True, rtt=False),
+                                "interfaces": {"server": "p0", "client": "p0"}}]}]})
+    output = capsys.readouterr().out
+    queues = [line.split()[:3] for line in output.splitlines() if line.startswith(("server ", "client "))]
+    assert queues == [["server", "0", "RX"], ["client", "0", "TX"]]
+    assert "SW one-way" in output and "HW one-way" in output
+
+
 def test_bandwidth_report_groups_application_and_nic_rates(frontend, capsys):
     args = frontend.parse_args(["bw", *LOCAL_UDP, "--message-sizes", "64,512"])
     frontend.resolve(args)
