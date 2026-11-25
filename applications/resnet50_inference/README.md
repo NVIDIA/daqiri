@@ -42,6 +42,18 @@ cmake --build build -j --target daqiri_resnet50_inference
 
 ## Data + ONNX
 
+The shipped configs use one model path: signed int8 pixels on the wire are
+converted by DAQIRI to fp16 before inference. The exporter writes an fp16
+input/backbone and fp32 feature output. TensorRT 11 takes these types from the
+ONNX graph; TensorRT 10 also sets its fp16 builder flag. The older
+`inference.enable_int8` calibration mode remains available with TensorRT 10,
+but TensorRT 11 rejects it during config parsing. It does not enable int8
+compute merely to accept int8 pixels on the wire.
+
+Build a new engine cache after changing the TensorRT version, GPU, or exported
+model. The example's `.engine` files are generated for a deployment environment
+and are not interchangeable model sources.
+
 ```bash
 python3 applications/resnet50_inference/tools/export_resnet_onnx.py \
   --model resnet50 --output models/resnet50_features.onnx

@@ -15,12 +15,13 @@
  * limitations under the License.
  */
 
-// TensorRT 10.x engine build + FP16/INT8 inference + double-buffered async D2H.
+// TensorRT 10/11 engine build + FP16 inference + double-buffered async D2H.
 
 #include "trt_runner.hpp"
 
 #include <NvInfer.h>
 #include <NvInferRuntime.h>
+#include <NvInferVersion.h>
 #include <NvOnnxParser.h>
 
 #include <cuda_fp16.h>
@@ -33,6 +34,7 @@
 #include <iostream>
 #include <memory>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -56,6 +58,7 @@ TrtLogger& trt_logger() {
   return logger;
 }
 
+#if NV_TENSORRT_MAJOR < 11
 // Entropy calibrator for INT8 PTQ. Feeds synthetic signed-int8 NCHW batches that
 // match the wire distribution (pixel_uint8 - 128). Cache is reused across builds.
 class Int8EntropyCalibrator : public nvinfer1::IInt8EntropyCalibrator2 {
@@ -135,6 +138,7 @@ class Int8EntropyCalibrator : public nvinfer1::IInt8EntropyCalibrator2 {
   std::vector<char> cache_;
   void* device_ = nullptr;
 };
+#endif
 
 void* out_dev_ptr(bool out_is_half, void* raw, float* fp32) {
   return out_is_half ? raw : static_cast<void*>(fp32);
@@ -162,6 +166,18 @@ TrtRunnerConfig TrtRunnerConfig::from_yaml(const YAML::Node& root) {
   if (inf["opt_max"]) cfg.opt_max = inf["opt_max"].as<int>();
   if (inf["enable_fp16"]) cfg.enable_fp16 = inf["enable_fp16"].as<bool>();
   if (inf["enable_int8"]) cfg.enable_int8 = inf["enable_int8"].as<bool>();
+#if NV_TENSORRT_MAJOR >= 11
+  if (cfg.enable_int8) {
+    throw std::runtime_error(
+        "inference.enable_int8 is unsupported with TensorRT 11; export the FP16 model and "
+        "use DAQIRI's int8-to-fp16 reorder conversion");
+  }
+  if (!cfg.enable_fp16) {
+    throw std::runtime_error(
+        "inference.enable_fp16 must be true with TensorRT 11; the exported model has FP16 "
+        "input and backbone tensors");
+  }
+#endif
   if (inf["enable_dual_context"]) cfg.enable_dual_context = inf["enable_dual_context"].as<bool>();
   if (inf["enable_cuda_graph"]) cfg.enable_cuda_graph = inf["enable_cuda_graph"].as<bool>();
   if (inf["calib_cache_path"]) cfg.calib_cache_path = inf["calib_cache_path"].as<std::string>();
@@ -323,6 +339,7 @@ void TrtRunner::build_or_load_engine_() {
     }
 
     auto* config = builder->createBuilderConfig();
+#if NV_TENSORRT_MAJOR < 11
     if (cfg_.enable_fp16) {
       config->setFlag(nvinfer1::BuilderFlag::kFP16);
     }
@@ -338,6 +355,7 @@ void TrtRunner::build_or_load_engine_() {
           /*n_batches=*/64, cfg_.calib_cache_path);
       config->setInt8Calibrator(calibrator.get());
     }
+#endif
 
     auto* profile = builder->createOptimizationProfile();
     const nvinfer1::Dims4 dmin{cfg_.opt_min, cfg_.channels, cfg_.height, cfg_.width};

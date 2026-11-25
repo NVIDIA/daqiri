@@ -26,8 +26,9 @@
 // FP16 path: ONNX input authored HALF by export_resnet_onnx.py (in-model norm);
 // features output is authored FLOAT (.float() after the backbone). Stale engines
 // with HALF features are still accepted and converted to float before the sink.
-// INT8 path: ONNX authored INT8 input + cast/norm; built with kINT8 (+ optional
-// kFP16) and an entropy calibrator (cache next to the engine).
+// TensorRT 10 INT8 path: ONNX authored INT8 input + cast/norm; built with kINT8
+// (+ optional kFP16) and an entropy calibrator (cache next to the engine).
+// TensorRT 11 requires the FP16 path; its graph carries the precision types.
 
 #include <yaml-cpp/yaml.h>
 
