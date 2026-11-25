@@ -47,8 +47,11 @@ struct FakeVerbs {
   bool auto_complete = false;
   uint64_t last_send_id = 0, last_receive_id = 0;
   unsigned last_flags = 0;
+  unsigned send_posts = 0, batch_posts = 0, signaled_sends = 0;
+  bool supports_atomic_batch = false;
   int send_result = 0, recv_result = 0;
   int fail_send_after = -1;
+  int fail_recv_after = 0;
   uint32_t requested_inline = 0;
   int created_cqs = 0, destroyed_cqs = 0, fail_cq = -1;
   bool fail_qp = false;
@@ -222,19 +225,25 @@ struct FakeVerbs {
     id->qp = &current->qp;
     return 0;
   }
-  static int poll_cq(ibv_cq* cq, int, ibv_wc* wc) {
+  static int create_send_batch_qp(rdma_cm_id* id, ibv_pd* pd, ibv_qp_init_attr* attr) {
+    if (current->supports_atomic_batch) return create_qp(id, pd, attr);
+    errno = EOPNOTSUPP;
+    return -1;
+  }
+  static int poll_cq(ibv_cq* cq, int max_entries, ibv_wc* wc) {
     std::lock_guard<std::mutex> lock(current->mutex);
     const bool rx = cq == &current->rx || cq == ibv_cq_ex_to_cq(&current->rx_ex) ||
                     cq == ibv_cq_ex_to_cq(&current->timed_rx);
     ++(rx ? current->rx_polls : current->tx_polls);
     auto& completions = rx ? current->rx_completions : current->tx_completions;
-    if (completions.empty()) return 0;
-    *wc = completions.front();
-    completions.pop_front();
-    return 1;
+    const int count = std::min(max_entries, static_cast<int>(completions.size()));
+    for (int i = 0; i < count; ++i) {
+      wc[i] = completions.front();
+      completions.pop_front();
+    }
+    return count;
   }
-  static int post_send(ibv_qp* qp, ibv_send_wr* wr, ibv_send_wr**) {
-    std::lock_guard<std::mutex> lock(current->mutex);
+  static int post_send_one(ibv_qp* qp, const ibv_send_wr* wr) {
     const bool one_sided = wr->opcode == IBV_WR_RDMA_READ || wr->opcode == IBV_WR_RDMA_WRITE ||
                            wr->opcode == IBV_WR_RDMA_WRITE_WITH_IMM;
     require((one_sided || wr->opcode == IBV_WR_SEND) &&
@@ -265,7 +274,28 @@ struct FakeVerbs {
       current->tx_completions.push_back(wc);
     }
     current->last_flags = wr->send_flags;
+    if (wr->send_flags & IBV_SEND_SIGNALED) ++current->signaled_sends;
     ++current->sends;
+    return 0;
+  }
+  static int post_send(ibv_qp* qp, ibv_send_wr* wr, ibv_send_wr** bad) {
+    std::lock_guard<std::mutex> lock(current->mutex);
+    ++current->send_posts;
+    for (; wr; wr = wr->next) {
+      if (const int result = post_send_one(qp, wr)) {
+        if (bad) *bad = wr;
+        return result;
+      }
+    }
+    return 0;
+  }
+  static int post_send_batch(ibv_qp* qp, const ibv_send_wr* wr) {
+    std::lock_guard<std::mutex> lock(current->mutex);
+    ++current->batch_posts;
+    if (current->send_result) return current->send_result;
+    for (; wr; wr = wr->next) {
+      require(post_send_one(qp, wr) == 0, "fake atomic post failed");
+    }
     return 0;
   }
   static int post_timed_send(ibv_qp* qp, ibv_send_wr* wr, uint64_t time) {
@@ -273,27 +303,30 @@ struct FakeVerbs {
     if (!result) current->send_times.push_back(time);
     return result;
   }
-  static int post_recv(ibv_qp* qp, ibv_recv_wr* wr, ibv_recv_wr**) {
+  static int post_recv(ibv_qp* qp, ibv_recv_wr* wr, ibv_recv_wr** bad) {
     std::lock_guard<std::mutex> lock(current->mutex);
     const bool ud = qp->qp_type == IBV_QPT_UD;
-    require((ud && wr->num_sge == 2 && wr->sg_list[0].length == sizeof(ibv_grh)) ||
-                (wr->num_sge == 1 && wr->sg_list) || (wr->num_sge == 0 && !wr->sg_list),
-            "incorrect RECEIVE encoding");
-    if (current->recv_result) {
-      return current->recv_result;
+    for (int ordinal = 0; wr; wr = wr->next, ++ordinal) {
+      require((ud && wr->num_sge == 2 && wr->sg_list[0].length == sizeof(ibv_grh)) ||
+                  (wr->num_sge == 1 && wr->sg_list) || (wr->num_sge == 0 && !wr->sg_list),
+              "incorrect RECEIVE encoding");
+      if (current->recv_result && ordinal == current->fail_recv_after) {
+        if (bad) *bad = wr;
+        return current->recv_result;
+      }
+      current->last_receive_id = wr->wr_id;
+      if (current->auto_complete) {
+        ibv_wc wc{};
+        wc.wr_id = wr->wr_id;
+        wc.status = IBV_WC_SUCCESS;
+        wc.opcode = IBV_WC_RECV;
+        wc.byte_len = ud            ? sizeof(ibv_grh) + wr->sg_list[1].length
+                      : wr->num_sge ? wr->sg_list->length
+                                    : 0;
+        current->rx_completions.push_back(wc);
+      }
+      ++current->receives;
     }
-    current->last_receive_id = wr->wr_id;
-    if (current->auto_complete) {
-      ibv_wc wc{};
-      wc.wr_id = wr->wr_id;
-      wc.status = IBV_WC_SUCCESS;
-      wc.opcode = IBV_WC_RECV;
-      wc.byte_len = ud            ? sizeof(ibv_grh) + wr->sg_list[1].length
-                    : wr->num_sge ? wr->sg_list->length
-                                  : 0;
-      current->rx_completions.push_back(wc);
-    }
-    ++current->receives;
     return 0;
   }
   static int modify_qp(ibv_qp*, ibv_qp_attr*, int) {
@@ -346,7 +379,7 @@ class RdmaEnginePollingTestPeer {
   RdmaEnginePollingTestPeer(bool direct_rx, bool direct_tx, bool accurate_send = false,
                             bool timestamps = false, bool realtime_supported = true,
                             RDMATransportMode transport = RDMATransportMode::RC,
-                            bool tx_timestamps_supported = true)
+                            bool tx_timestamps_supported = true, bool atomic_batch = false)
       : params(engine.server_q_params_.try_emplace(&listener, 1).first->second[0]) {
     FakeVerbs::current = &fake;
     api.cm_create_event_channel = &FakeVerbs::create_channel;
@@ -364,6 +397,7 @@ class RdmaEnginePollingTestPeer {
     api.cm_reject = &FakeVerbs::reject;
     fake.realtime_supported = realtime_supported;
     fake.tx_timestamps_supported = tx_timestamps_supported;
+    fake.supports_atomic_batch = atomic_batch;
     api.create_cq = &FakeVerbs::create_cq;
     api.create_cq_ex = &FakeVerbs::create_cq_ex;
     api.start_poll = &FakeVerbs::start_poll;
@@ -375,6 +409,8 @@ class RdmaEnginePollingTestPeer {
     api.wc_read_completion_wallclock_ns = &FakeVerbs::read_timestamp;
     api.create_timed_qp = &FakeVerbs::create_timed_qp;
     api.cm_create_qp = &FakeVerbs::create_qp;
+    api.create_send_batch_qp = &FakeVerbs::create_send_batch_qp;
+    api.post_send_batch = &FakeVerbs::post_send_batch;
     api.destroy_cq = &FakeVerbs::destroy_cq;
     api.cm_destroy_qp = &FakeVerbs::destroy_qp;
     api.poll_cq = &FakeVerbs::poll_cq;
@@ -426,6 +462,7 @@ class RdmaEnginePollingTestPeer {
     memory.params_.num_bufs_ = 1;
     memory.ctx_mr_map_[&pd] = &mr;
     require(engine.setup_thread_params(&params, false) == 0, "QP setup failed");
+    require(params.atomic_send_batch == atomic_batch, "wrong batch posting capability");
     if (transport == RDMATransportMode::UD) {
       rdma_ud_param peer{};
       peer.qp_num = 321;
@@ -463,6 +500,55 @@ class RdmaEnginePollingTestPeer {
     engine.initialized_ = false;
     Ring::free(tx_ring);
     Ring::free(rx_ring);
+  }
+
+  void bulk_repost() {
+    engine.initialize_progress(false, &params);
+    engine.connection_params_[&id] = &params;
+    require(engine.publish_direct(&params), "bulk receive state was not published");
+    fake.auto_complete = true;
+    auto connection = reinterpret_cast<uintptr_t>(&id);
+    std::array<BurstParams, 3> metadata{};
+    std::array<void*, 3> data{};
+    std::array<uint32_t, 3> lengths{};
+    std::array<BurstParams*, 3> completions{};
+    for (size_t i = 0; i < metadata.size(); ++i) {
+      auto& burst = metadata[i];
+      data[i] = reinterpret_cast<void*>(4096 + i * 64);
+      require(engine.rdma_set_header(&burst, RDMAOpCode::RECEIVE, connection, false, 1, i,
+                                     "data") == Status::SUCCESS,
+              "bulk receive header");
+      burst.pkts[0] = &data[i];
+      burst.pkt_lens[0] = &lengths[i];
+      lengths[i] = 64;
+      require(engine.send_tx_burst(&burst) == Status::SUCCESS, "bulk receive prime");
+    }
+    fake.rx_completions.front().byte_len = 32;
+    size_t count = 0;
+    require(engine.rdma_poll_receive_batch(connection, completions.data(), 3, &count) ==
+                    Status::SUCCESS &&
+                count == 3 && fake.rx_polls == 1 && lengths[0] == 32,
+            "bulk receive polling");
+    std::array<BurstParams*, 2> repeated{completions[0], completions[0]};
+    require(engine.rdma_repost_receive_batch(connection, repeated.data(), 2, &count) ==
+                    Status::INVALID_PARAMETER &&
+                count == 0,
+            "bulk receive rejects duplicate buffers");
+    fake.recv_result = ENOMEM;
+    fake.fail_recv_after = 1;
+    require(engine.rdma_repost_receive_batch(connection, completions.data(), 3, &count) ==
+                    Status::GENERIC_FAILURE &&
+                count == 1,
+            "bulk receive accepted prefix");
+    fake.recv_result = 0;
+    require(engine.rdma_repost_receive_batch(connection, completions.data() + 1, 2, &count) ==
+                    Status::SUCCESS &&
+                count == 2,
+            "bulk receive suffix remains caller-owned");
+    require(engine.rdma_poll_receive_batch(connection, completions.data(), 3, &count) ==
+                    Status::SUCCESS &&
+                count == 3 && lengths[0] == 64,
+            "bulk repost restored the original receive capacity");
   }
 
   void tx_timestamps(bool server, RDMAOpCode operation, bool empty = false) {
@@ -789,6 +875,131 @@ class RdmaEnginePollingTestPeer {
             "transport teardown leaked AHs, registrations, or queue reservations");
   }
 
+  void send_fencing() {
+    engine.initialize_progress(false, &params);
+    if (params.direct_tx)
+      require(engine.publish_direct(&params), "could not publish direct test connection");
+    engine.connection_params_[&id] = &params;
+    fake.auto_complete = true;
+    std::array<BurstParams, 4> bursts{};
+    std::array<char, 256> data{};
+    std::array<void*, 4> pointers{};
+    std::array<uint32_t, 4> lengths{};
+    auto submit = [&](int index, RDMAOpCode op, bool fence) {
+      auto& burst = bursts[index];
+      require(engine.rdma_set_header(&burst, op, reinterpret_cast<uintptr_t>(&id), false, 1, index,
+                                     "data") == Status::SUCCESS,
+              "could not set headers for fence test");
+      pointers[index] = data.data() + 64 * index;
+      lengths[index] = 64;
+      burst.pkts[0] = &pointers[index];
+      burst.pkt_lens[0] = &lengths[index];
+      burst.transport_hdr.raddr = reinterpret_cast<void*>(4096);
+      burst.transport_hdr.dst_key = 456;
+      burst.transport_hdr.remote_length = 64;
+      burst.transport_hdr.remote_access = MEM_ACCESS_RDMA_READ;
+      require(engine.send_tx_burst(&burst) == Status::SUCCESS, "fence test submission failed");
+      if (!params.direct_tx) {
+        BurstParams* pending = nullptr;
+        require(tx_ring->dequeue(reinterpret_cast<void**>(&pending)) &&
+                    engine.post_burst(&params, pending) == Status::SUCCESS,
+                "fence test posting failed");
+      }
+      require(bool(fake.last_flags & IBV_SEND_FENCE) == fence, "unexpected SEND fence");
+    };
+    auto complete = [&](int index) {
+      if (!params.direct_tx) engine.poll_completions(false, &params, false, true);
+      BurstParams* result = nullptr;
+      require(engine.get_rx_burst(&result, reinterpret_cast<uintptr_t>(&id), false) ==
+                      Status::SUCCESS &&
+                  result == &bursts[index] && result->transport_hdr.status == Status::SUCCESS,
+              "fence test lost or reordered a completion");
+    };
+    submit(0, RDMAOpCode::SEND, false);
+    complete(0);
+    submit(1, RDMAOpCode::RDMA_READ, true);
+    submit(2, RDMAOpCode::SEND, true);
+    complete(1);
+    complete(2);
+    submit(3, RDMAOpCode::SEND, false);
+    complete(3);
+  }
+
+  void native_send_batch() {
+    fake.auto_complete = true;
+    constexpr int count = 3;
+    const bool atomic = params.atomic_send_batch;
+    BurstParams burst{};
+    std::array<char, count * 64> data{};
+    std::array<void*, count> pointers{data.data(), data.data() + 64, data.data() + 128};
+    std::array<uint32_t, count> lengths{64, 64, 64};
+    auto submit = [&]() {
+      require(engine.rdma_set_header(&burst, RDMAOpCode::SEND, reinterpret_cast<uintptr_t>(&id),
+                                     false, count, 7, "data") == Status::SUCCESS,
+              "could not set SEND batch header");
+      burst.pkts[0] = pointers.data();
+      burst.pkt_lens[0] = lengths.data();
+      require(engine.post_burst(&params, &burst) == Status::SUCCESS, "SEND batch failed");
+    };
+    auto complete = [&](Status status) {
+      engine.poll_completions(false, &params, false, true);
+      BurstParams* result = nullptr;
+      require(rx_ring->dequeue(reinterpret_cast<void**>(&result)) && result == &burst &&
+                  burst.transport_hdr.status == status && rx_ring->count() == 0 &&
+                  params.outstanding_send_wr_ids.empty(),
+              "SEND batch ownership or completion status was lost");
+    };
+    submit();
+    require(fake.sends == count && fake.send_posts == (atomic ? 0 : 1) &&
+                fake.batch_posts == (atomic ? 1 : 0) && fake.signaled_sends == (atomic ? 1 : count),
+            "SEND batch did not use native posting or expected signaling");
+    complete(Status::SUCCESS);
+
+    const auto next_id = params.outstanding_send_wr_ids.next_id();
+    fake.send_result = ENOMEM;
+    fake.fail_send_after = count + 1;  // Legacy accepts one WR, atomic accepts none.
+    submit();
+    require(params.outstanding_send_wr_ids.size() == (atomic ? 0 : 1) &&
+                params.outstanding_send_wr_ids.next_id() == next_id + (atomic ? 0 : 1),
+            "failed SEND batch tracked work the NIC did not accept");
+    complete(Status::GENERIC_FAILURE);
+    fake.send_result = 0;
+    submit();
+    complete(Status::SUCCESS);
+  }
+
+  void receive_cq_batch() {
+    fake.auto_complete = true;
+    std::array<BurstParams, 3> bursts{};
+    std::array<char, 192> data{};
+    std::array<void*, 3> pointers{};
+    std::array<uint32_t, 3> lengths{64, 64, 64};
+    for (size_t i = 0; i < bursts.size(); ++i) {
+      // A CQE may remain unread after its hardware RQ slot is reusable.
+      if (i == 1) params.next_receive_id += params.single_receives.size() - 1;
+      auto& burst = bursts[i];
+      require(engine.rdma_set_header(&burst, RDMAOpCode::RECEIVE, reinterpret_cast<uintptr_t>(&id),
+                                     false, 1, i, "data") == Status::SUCCESS,
+              "could not set RECEIVE header");
+      pointers[i] = data.data() + 64 * i;
+      burst.pkts[0] = &pointers[i];
+      burst.pkt_lens[0] = &lengths[i];
+      require(engine.post_burst(&params, &burst) == Status::SUCCESS, "RECEIVE post failed");
+    }
+    require(params.outstanding_receive_wr_ids.size() == 1,
+            "receive tracking lost the fallback for a reused slot");
+    engine.poll_completions(false, &params, true, false, bursts.size());
+    require(fake.rx_polls == 1 && params.outstanding_receive_wr_ids.empty() &&
+                params.pending_receives.empty(),
+            "indirect RX did not poll or retire the completions together");
+    for (auto& burst : bursts) {
+      BurstParams* done = nullptr;
+      require(rx_ring->dequeue(reinterpret_cast<void**>(&done)) && done == &burst &&
+                  burst.transport_hdr.status == Status::SUCCESS,
+              "batched polling lost a RECEIVE completion");
+    }
+  }
+
   void check_timestamp(BurstParams* burst, bool receive, uint64_t wr_id) {
     uint64_t timestamp_ns = 1;
     const auto status = engine.get_packet_rx_timestamp(burst, 0, &timestamp_ns);
@@ -815,7 +1026,6 @@ class RdmaEnginePollingTestPeer {
               "receive header failed");
       burst.pkt_lens[0] = &lengths[i];
       params.outstanding_receive_wr_ids[500 + i] = {&burst, 0};
-      params.pending_receives[&burst] = 1;
       ibv_wc wc{};
       wc.wr_id = 500 + i;
       wc.status = IBV_WC_SUCCESS;
@@ -1679,6 +1889,11 @@ daqiri:
       require(engine.rdma_get_server_conn_id("127.0.0.1", 9999, &connection) == Status::SUCCESS &&
                   connection == reinterpret_cast<uintptr_t>(&id),
               "server connection was not discoverable");
+      uint16_t port = UINT16_MAX;
+      uint16_t queue = UINT16_MAX;
+      require(engine.rdma_get_port_queue(connection, &port, &queue) == Status::SUCCESS &&
+                  port == params.if_idx && queue == params.queue_idx,
+              "server connection did not resolve to its configured port and queue");
     }
 
     if (direct_rx && direct_tx) {
@@ -1767,7 +1982,6 @@ daqiri:
     receive.transport_hdr.wr_id = 40;
     params.outstanding_send_wr_ids.posted(&send, 0);
     params.outstanding_receive_wr_ids[40] = {&receive, 0};
-    params.pending_receives[&receive] = 1;
     tx_wc.wr_id = params.outstanding_send_wr_ids.next_id() - 1;
     tx_wc.status = IBV_WC_LOC_PROT_ERR;
     tx_wc.opcode = IBV_WC_RDMA_READ;
@@ -1838,6 +2052,19 @@ int main() {
   try {
     daqiri::RdmaEnginePollingTestPeer::configuration();
     daqiri::RdmaEnginePollingTestPeer::buffer_strides();
+    for (bool direct : {false, true}) {
+      daqiri::RdmaEnginePollingTestPeer test(direct, direct);
+      test.send_fencing();
+    }
+    for (bool atomic : {false, true}) {
+      daqiri::RdmaEnginePollingTestPeer test(false, false, false, false, true,
+                                             daqiri::RDMATransportMode::RC, true, atomic);
+      test.native_send_batch();
+    }
+    {
+      daqiri::RdmaEnginePollingTestPeer test(false, false);
+      test.receive_cq_batch();
+    }
     for (auto transport : {daqiri::RDMATransportMode::UC, daqiri::RDMATransportMode::UD}) {
       for (bool rx : {false, true}) {
         for (bool tx : {false, true}) {
@@ -1934,6 +2161,8 @@ int main() {
                                                       daqiri::RDMATransportMode::RC, false);
         unsupported.tx_timestamps(false, daqiri::RDMAOpCode::SEND);
       }
+    daqiri::RdmaEnginePollingTestPeer bulk(true, true);
+    bulk.bulk_repost();
     std::cout << "PASS: RDMA direct/indirect RX/TX, inline selection, buffer strides, and "
                  "completions\n";
     return 0;

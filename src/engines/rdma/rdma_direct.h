@@ -49,6 +49,7 @@ struct RdmaDirectState {
   std::array<Request, kRequests> receives{};
   uint64_t sends_posted = 0;
   uint64_t sends_completed = 0;
+  uint64_t last_read_id = 0;
   uint64_t receives_posted = 0;
   uint32_t receive_count = 0;
   bool poll_tx_first = false;
@@ -80,6 +81,8 @@ struct RdmaBurstCache {
   TxTimestampId* tx_timestamp_ids = nullptr;
   uint16_t tx_timestamp_count = 0;
   bool tx_timestamp_submitted = false;
+  bool receive_repostable = false;
+  uint32_t receive_capacity = 0;
 };
 static_assert(sizeof(BurstTransportHeader) <=
               ADV_NETWORK_HEADER_SIZE_BYTES - sizeof(RdmaBurstCache));

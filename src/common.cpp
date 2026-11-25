@@ -721,6 +721,18 @@ Status get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) {
   return g_daqiri_engine->get_rx_burst(burst, conn_id, server);
 }
 
+Status rdma_poll_receive_batch(uintptr_t conn_id, BurstParams** bursts, size_t capacity,
+                               size_t* received) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->rdma_poll_receive_batch(conn_id, bursts, capacity, received);
+}
+
+Status rdma_repost_receive_batch(uintptr_t conn_id, BurstParams* const* bursts, size_t count,
+                                 size_t* posted) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->rdma_repost_receive_batch(conn_id, bursts, count, posted);
+}
+
 Status set_reorder_cuda_stream(const std::string& interface_name,
                                const std::string& reorder_name,
                                cudaStream_t stream) {
@@ -758,7 +770,8 @@ Status daqiri_init(NetworkConfig& config) {
   return daqiri_init(config, no_bindings);
 }
 
-Status daqiri_init(NetworkConfig& config, const MemoryRegionBindings& bindings) {
+static Status daqiri_init_impl(NetworkConfig& config, const MemoryRegionBindings& bindings,
+                               const DeviceMemoryPrefixes& prefixes) {
   if (g_daqiri_engine != nullptr) {
     DAQIRI_LOG_ERROR("DAQIRI is already initialized; call shutdown() before daqiri_init()");
     return Status::INTERNAL_ERROR;
@@ -798,8 +811,10 @@ Status daqiri_init(NetworkConfig& config, const MemoryRegionBindings& bindings) 
   if (config.common_.stream_type == StreamType::SOCKET &&
       (config.common_.protocol == SocketProtocol::TCP ||
        config.common_.protocol == SocketProtocol::UDP)) {
-    if (!bindings.empty()) {
-      DAQIRI_LOG_ERROR("External memory bindings are not supported for direct TCP/UDP sockets");
+    if (!bindings.empty() || !prefixes.empty()) {
+      DAQIRI_LOG_ERROR(
+          "External memory bindings and device prefixes are not supported for direct TCP/UDP "
+          "sockets");
       return Status::NOT_SUPPORTED;
     }
     std::unordered_set<std::string> gpu_mrs;
@@ -855,7 +870,8 @@ Status daqiri_init(NetworkConfig& config, const MemoryRegionBindings& bindings) 
 
   auto engine = &(EngineFactory::get_active_engine());
 
-  if (engine->set_external_memory_regions(config, bindings) != Status::SUCCESS) {
+  if (engine->set_external_memory_regions(config, bindings) != Status::SUCCESS ||
+      engine->set_device_memory_prefixes(config, prefixes) != Status::SUCCESS) {
     reset_active_engine();
     metrics::shutdown();
     return Status::INVALID_PARAMETER;
@@ -879,6 +895,11 @@ Status daqiri_init(NetworkConfig& config, const MemoryRegionBindings& bindings) 
   }
 
   return Status::SUCCESS;
+}
+
+Status daqiri_init(NetworkConfig& config, const MemoryRegionBindings& bindings) {
+  static const DeviceMemoryPrefixes no_prefixes;
+  return daqiri_init_impl(config, bindings, no_prefixes);
 }
 
 namespace {
@@ -1095,10 +1116,17 @@ Status daqiri_init_from_yaml_file(const std::string& yaml_path) {
 
 Status daqiri_init_from_yaml_file(const std::string& yaml_path,
                                   const MemoryRegionBindings& bindings) {
+  static const DeviceMemoryPrefixes no_prefixes;
+  return daqiri_init_from_yaml_file(yaml_path, bindings, no_prefixes);
+}
+
+Status daqiri_init_from_yaml_file(const std::string& yaml_path,
+                                  const MemoryRegionBindings& bindings,
+                                  const DeviceMemoryPrefixes& prefixes) {
   NetworkConfig config;
   const Status parse_status = parse_network_config_from_yaml_file(yaml_path, config);
   if (parse_status != Status::SUCCESS) { return parse_status; }
-  return daqiri_init(config, bindings);
+  return daqiri_init_impl(config, bindings, prefixes);
 }
 
 Status daqiri_init(const std::string& yaml_string_or_path) {
@@ -1818,7 +1846,7 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_reorder_config(
 bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
     const YAML::Node& mr, daqiri::MemoryRegionConfig& tmr) {
   if (!daqiri::detail::validate_yaml_mapping_keys(
-          mr, {"name", "kind", "affinity", "access", "num_bufs", "buf_size", "owned"},
+          mr, {"name", "kind", "affinity", "access", "num_bufs", "buf_size", "owned", "zero_init"},
           "memory region")) {
     return false;
   }
@@ -1838,6 +1866,15 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
     if (tmr.kind_ == daqiri::MemoryKind::INVALID) {
       DAQIRI_LOG_ERROR(
           "Invalid memory-region kind; valid values are huge, device, host_pinned, host, and null");
+      return false;
+    }
+    bool zero_init = false;
+    if (!daqiri::detail::parse_optional_yaml_scalar(mr, "zero_init", false, zero_init,
+                                                    "memory region")) {
+      return false;
+    }
+    if (zero_init && tmr.kind_ != daqiri::MemoryKind::DEVICE) {
+      DAQIRI_LOG_ERROR("Memory-region zero_init requires device memory");
       return false;
     }
     if (tmr.kind_ == daqiri::MemoryKind::NULL_MR) {
@@ -1901,6 +1938,13 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
     if (!daqiri::detail::parse_optional_yaml_scalar(mr, "owned", true, tmr.owned_,
                                                     "memory region")) {
       return false;
+    }
+    if (zero_init) {
+      if (!tmr.owned_) {
+        DAQIRI_LOG_ERROR("Memory-region zero_init requires DAQIRI-owned storage");
+        return false;
+      }
+      tmr.access_ |= daqiri::MEM_INIT_ZERO;
     }
   } catch (const std::exception& e) {
     DAQIRI_LOG_ERROR("Error parsing MemoryRegionConfig: {}", e.what());

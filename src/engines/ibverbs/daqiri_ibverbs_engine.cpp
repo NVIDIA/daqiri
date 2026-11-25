@@ -6880,6 +6880,10 @@ Status IbverbsEngine::add_tx_queue_async(int port, const TxQueueConfig& config,
 
 Status IbverbsEngine::allocate_runtime_mr(MemoryRegionConfig config,
                                           const ExternalMemoryRegion* binding) {
+  if ((config.access_ & MEM_INIT_ZERO) &&
+      (config.kind_ != MemoryKind::DEVICE || !config.owned_ || binding != nullptr)) {
+    return Status::INVALID_PARAMETER;
+  }
   if (!config.name_.empty() && config.kind_ == MemoryKind::NULL_MR) {
     if (binding != nullptr || config.buf_size_ > UINT32_MAX) return Status::INVALID_PARAMETER;
     config.num_bufs_ = config.adj_size_ = config.ttl_size_ = 0;
@@ -7044,6 +7048,15 @@ Status IbverbsEngine::allocate_runtime_mr(MemoryRegionConfig config,
           cuMemFree(device_ptr);
           cuCtxSetCurrent(previous);
           return Status::GENERIC_FAILURE;
+        }
+        if (config.access_ & MEM_INIT_ZERO) {
+          if (cuMemsetD8(device_ptr, 0, config.ttl_size_) != CUDA_SUCCESS ||
+              cuCtxSynchronize() != CUDA_SUCCESS) {
+            DAQIRI_LOG_ERROR("Could not zero device memory region '{}'", config.name_);
+            cuMemFree(device_ptr);
+            cuCtxSetCurrent(previous);
+            return Status::GENERIC_FAILURE;
+          }
         }
         ptr = reinterpret_cast<void*>(device_ptr);
         allocation.cuda_device_ = config.affinity_;
@@ -8744,9 +8757,9 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
       return Status::GENERIC_FAILURE;
     }
   }
-  DAQIRI_LOG_INFO("TX queue {} ready in {} mode: {} slots of {}B, qp {} (mr {})", q.queue_id,
-                  queue_poll_mode_to_string(q.poll_mode), q.num_slots, q.slot_size, (void*)q.qp,
-                  q.mr_name);
+  DAQIRI_LOG_INFO("TX queue {} ready in {} mode: {} slots of {}B, qp {} (mr {}), eMPW eligible={}",
+                  q.queue_id, queue_poll_mode_to_string(q.poll_mode), q.num_slots, q.slot_size,
+                  (void*)q.qp, q.mr_name, q.empw_enabled);
   return Status::SUCCESS;
 }
 
@@ -8853,6 +8866,7 @@ uint64_t IbverbsEngine::tx_burst_wqebbs(const IbvTxQueue& q, const BurstParams* 
   const uint64_t packets = burst->hdr.hdr.num_pkts;
   const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
   if ((burst->hdr.hdr.burst_flags & IBV_TX_ENDPOINT_INLINE_FLAG) != 0) {
+    // Reserve for all configured segments. Posting may omit empty segments.
     uint64_t wqebbs = packets * gather_wqe_wqebbs(q.num_segs, true);
     if (scheduled) {
       const uint64_t* txtime = burst_ts_arr(burst);
@@ -9457,8 +9471,6 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst, uint16
 // by all gathered payload segments. The 42-byte cached template is copied into
 // the SQ, not into the host/GPU payload buffers.
 void IbverbsEngine::post_endpoint_inline_burst(IbvTxQueue& q, BurstParams* burst) {
-  const uint32_t wqebbs = gather_wqe_wqebbs(q.num_segs, true);
-  const uint8_t ds = gather_wqe_ds(q.num_segs, true);
   constexpr size_t PAYLOAD_DSEG_OFFSET = 80;
   constexpr size_t WQE_BYTES = gather_wqe_wqebbs(MAX_NUM_SEGS, true) * MLX5_SEND_WQE_BB;
   static_assert(16 + offsetof(struct mlx5_wqe_eth_seg, inline_hdr_start) + sizeof(UDPIPV4Pkt) <=
@@ -9488,17 +9500,27 @@ void IbverbsEngine::post_endpoint_inline_burst(IbvTxQueue& q, BurstParams* burst
                           ((packet % SIGNAL_EVERY) == (SIGNAL_EVERY - 1)) ||
                           (packet == packets - 1);
     ctrl->opmod_idx_opcode = htobe32(((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_SEND);
-    ctrl->qpn_ds = htobe32((q.sqn << 8) | ds);
     ctrl->fm_ce_se = tx_completion_mode(signaled);
+
+    auto* data = reinterpret_cast<struct mlx5_wqe_data_seg*>(wqe.data() + PAYLOAD_DSEG_OFFSET);
+    uint32_t payload_length = 0;
+    int data_segments = 0;
+    for (int s = 0; s < q.num_segs; ++s) {
+      const uint32_t length = burst->pkt_lens[s][packet];
+      if (length == 0) continue;
+      auto& segment = data[data_segments++];
+      segment.byte_count = htobe32(length);
+      segment.lkey = htobe32(q.regions[s].lkey);
+      segment.addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[s][packet]));
+      payload_length += length;
+    }
+    ctrl->qpn_ds = htobe32((q.sqn << 8) | gather_wqe_ds(data_segments, true));
+    const uint32_t wqebbs = gather_wqe_wqebbs(data_segments, true);
 
     auto* eth = reinterpret_cast<struct mlx5_wqe_eth_seg*>(wqe.data() + 16);
     eth->cs_flags = MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
     eth->inline_hdr_sz = htobe16(sizeof(UDPIPV4Pkt));
     UDPIPV4Pkt header = metadata->header;
-    uint32_t payload_length = 0;
-    for (int s = 0; s < q.num_segs; ++s) {
-      payload_length += burst->pkt_lens[s][packet];
-    }
     header.ip.tot_len = htobe16(
         static_cast<uint16_t>(sizeof(struct iphdr) + sizeof(struct udphdr) + payload_length));
     header.ip.check = 0;
@@ -9506,13 +9528,6 @@ void IbverbsEngine::post_endpoint_inline_burst(IbvTxQueue& q, BurstParams* burst
     header.udp.check = 0;
     memcpy(wqe.data() + 16 + offsetof(struct mlx5_wqe_eth_seg, inline_hdr_start), &header,
            sizeof(header));
-
-    auto* dseg = reinterpret_cast<struct mlx5_wqe_data_seg*>(wqe.data() + PAYLOAD_DSEG_OFFSET);
-    for (int s = 0; s < q.num_segs; ++s) {
-      dseg[s].byte_count = htobe32(burst->pkt_lens[s][packet]);
-      dseg[s].lkey = htobe32(q.regions[s].lkey);
-      dseg[s].addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[s][packet]));
-    }
 
     uint8_t* first = sq_buf + static_cast<size_t>(first_idx) * stride;
     copy_wqe_to_cyclic_sq(sq_buf, wqe_cnt, stride, first_idx, wqe.data(), wqebbs);

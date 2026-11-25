@@ -144,6 +144,7 @@ class Engine {
   virtual bool set_config_and_initialize(const NetworkConfig& cfg) = 0;
   Status set_external_memory_regions(const NetworkConfig& cfg,
                                      const MemoryRegionBindings& bindings);
+  Status set_device_memory_prefixes(const NetworkConfig& cfg, const DeviceMemoryPrefixes& prefixes);
   virtual void run() = 0;
 
   // Common free functions to override
@@ -195,6 +196,14 @@ class Engine {
   virtual uint64_t get_burst_tot_byte(BurstParams* burst) = 0;
   virtual BurstParams* create_tx_burst_params() = 0;
   virtual Status get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server);
+  virtual Status rdma_poll_receive_batch(uintptr_t, BurstParams**, size_t, size_t* received) {
+    if (received) *received = 0;
+    return Status::NOT_SUPPORTED;
+  }
+  virtual Status rdma_repost_receive_batch(uintptr_t, BurstParams* const*, size_t, size_t* posted) {
+    if (posted) *posted = 0;
+    return Status::NOT_SUPPORTED;
+  }
   virtual Status get_rx_burst(BurstParams** burst, int port, int q) = 0;
   virtual Status get_rx_burst(BurstParams** burst, int port_id);
   virtual Status get_rx_burst(BurstParams** burst);
@@ -314,6 +323,7 @@ class Engine {
   };
   std::vector<HugepageArena> hugepage_arenas_;
   std::unordered_map<std::string, ResolvedExternalMemoryRegion> external_mrs_;
+  DeviceMemoryPrefixes device_memory_prefixes_;
   // shared_ptr to an incomplete type -- only populated by the DPDK engine
   // (engine_dpdk.cpp). Layout is identical in every build.
   std::unordered_map<std::string, std::shared_ptr<struct rte_pktmbuf_extmem>> ext_pktmbufs_;

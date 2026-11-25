@@ -108,6 +108,13 @@ their configured regions are not packet pools. DPDK also rejects externally boun
 EAL assumes ownership of pre-existing hugepage mappings during initialization and unmaps them at
 cleanup. External `huge` regions remain supported by ibverbs/RDMA.
 
+The `daqiri_init_from_yaml_file(path, bindings, prefixes)` overload accepts
+`DeviceMemoryPrefixes`, a map from a DAQIRI-owned device region name to host
+bytes copied to the start of each buffer during allocation. Each prefix must
+fit the configured buffer size. With `zero_init` enabled, the bytes following
+the prefix are zero. Applications can use this to prepare complete frames in
+device memory before submitting them through the ordinary raw TX API.
+
 If GPU RX `reorder_configs` are configured for Raw Ethernet (`stream_type: "raw"`), set
 one CUDA stream per GPU reorder plan before pulling reordered bursts. CPU reorder configs do not use a
 CUDA stream. See the [Configuration YAML Reference](configuration.md#rx-reorder-configs)
@@ -1130,6 +1137,19 @@ workflow sections above show the common call order and ownership rules.
 | `rdma_set_header(burst, RDMA_WRITE_IMM, conn_id, is_server, num_pkts, wr_id, local_mr_name, immediate_data)` | Create an explicit write-with-immediate operation using a host-order 32-bit value. |
 | `rdma_get_immediate_data(burst, &value[, &written_bytes])` | Read a successful write-with-immediate request/completion's host-order value. |
 | `rdma_get_opcode(burst)` | Return the RDMA operation code recorded on a burst. |
+
+### Direct RDMA receive batches
+
+On a direct RC connection with ordinary RX completions, call
+`rdma_poll_receive_batch(conn_id, bursts, capacity, &received)` to poll up to
+32 RX completions at once. This call services RX only. The application owns
+every returned burst and checks its `transport_hdr.status` before using the data.
+
+After processing the data, call
+`rdma_repost_receive_batch(conn_id, bursts, received, &posted)` to replenish
+the QP from successful completions. Reposting uses the original buffer
+capacity. The QP owns the first `posted` bursts even if posting fails partway.
+The application can retry or free the remaining caller-owned bursts.
 
 ### RDMA reads and writes
 

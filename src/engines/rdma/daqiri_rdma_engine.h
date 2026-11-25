@@ -100,6 +100,11 @@ struct rdma_thread_params {
     size_t packet;
     BurstParams* completion = nullptr;
   };
+  struct SingleReceive {
+    uint64_t id = 0;
+    BurstParams* burst = nullptr;
+  };
+  std::array<SingleReceive, RdmaDirectState::kRequests> single_receives{};
   std::unordered_map<uint64_t, ReceiveWork> outstanding_receive_wr_ids;
   std::unordered_map<BurstParams*, size_t> pending_receives;
   // Reserve every split completion before accepting an indirect receive batch.
@@ -109,6 +114,7 @@ struct rdma_thread_params {
   int send_signal_every = 1;
   uint64_t sends_since_signal = 0;
   uint32_t tx_timestamp_outstanding = 0;
+  bool atomic_send_batch = false;
 };
 
 // Used to spawn a new server thread for a particular client
@@ -186,6 +192,10 @@ class RdmaEngine : public Engine {
     return Status::NOT_SUPPORTED;
   };
   Status get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) override;
+  Status rdma_poll_receive_batch(uintptr_t conn_id, BurstParams** bursts, size_t capacity,
+                                 size_t* received) override;
+  Status rdma_repost_receive_batch(uintptr_t conn_id, BurstParams* const* bursts, size_t count,
+                                   size_t* posted) override;
   Status set_packet_tx_time(BurstParams* burst, int idx, uint64_t timestamp) override;
   void free_rx_metadata(BurstParams* burst) override;
   void free_tx_metadata(BurstParams* burst) override;
@@ -290,10 +300,12 @@ class RdmaEngine : public Engine {
   const RdmaDirectMr* direct_region(RdmaDirectState& state, BurstParams* burst);
   Ring* burst_pool(BurstParams* burst);
   void initialize_progress(bool is_server, rdma_thread_params* params);
-  void poll_completions(bool is_server, rdma_thread_params* params, bool poll_rx, bool poll_tx);
+  void poll_completions(bool is_server, rdma_thread_params* params, bool poll_rx, bool poll_tx,
+                        int budget = MAX_CQ);
   bool reserve_receive_completions(rdma_thread_params* params, BurstParams* burst);
   void release_receive_completions(rdma_thread_params* params, BurstParams* burst);
   Status post_burst(rdma_thread_params* params, BurstParams* burst);
+  Status post_send_batch(rdma_thread_params* params, BurstParams* burst, uint32_t lkey);
   void rdma_thread(bool is_server, rdma_thread_params* tparams);
   int setup_pools_and_rings();
   int rdma_register_mr(const MemoryRegionConfig& mr, void* ptr);

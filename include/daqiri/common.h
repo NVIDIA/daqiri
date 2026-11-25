@@ -275,6 +275,12 @@ Status daqiri_init_from_yaml_string(const std::string &yaml_string,
 Status daqiri_init_from_yaml_file(const std::string &yaml_path);
 Status daqiri_init_from_yaml_file(const std::string &yaml_path,
                                   const MemoryRegionBindings &bindings);
+// Copy a host byte prefix into each slot of the specified DAQIRI-owned device
+// regions during allocation. Bytes after the prefix retain the configured
+// initialization policy.
+Status daqiri_init_from_yaml_file(const std::string& yaml_path,
+                                  const MemoryRegionBindings& bindings,
+                                  const DeviceMemoryPrefixes& prefixes);
 
 Status get_memory_region_requirements(const NetworkConfig &config,
                                       MemoryRegionRequirements &requirements);
@@ -1180,6 +1186,17 @@ Status get_rx_burst(BurstParams **burst);
  * to dequeue from.
  */
 Status get_rx_burst(BurstParams **burst, uintptr_t conn_id, bool server);
+
+// Direct RC connections can poll up to 32 receive completions at once.
+// A returned burst is caller-owned, including a burst with a failed CQE.
+Status rdma_poll_receive_batch(uintptr_t conn_id, BurstParams** bursts, size_t capacity,
+                               size_t* received);
+
+// Repost receive buffers returned by rdma_poll_receive_batch. Ownership of the
+// first *posted buffers transfers to the QP, even when a later post fails.
+// Call only after the application is finished reading the buffers.
+Status rdma_repost_receive_batch(uintptr_t conn_id, BurstParams* const* bursts, size_t count,
+                                 size_t* posted);
 
 /**
  * @brief Set CUDA stream for a configured GPU reorder plan

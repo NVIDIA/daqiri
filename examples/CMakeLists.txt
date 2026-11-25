@@ -7,6 +7,7 @@ endif()
 
 project(daqiri_bench_examples LANGUAGES CXX CUDA)
 
+include(GNUInstallDirs)
 find_package(CUDAToolkit REQUIRED)
 
 if(DAQIRI_EXAMPLES_USING_DEFAULT_CUDA_ARCHITECTURES AND
@@ -206,3 +207,15 @@ install(FILES ${DAQIRI_PYTHON_EXAMPLES}
 add_executable(daqiri_example_rdma_read_write rdma_read_write_example.cpp)
 link_daqiri_bench(daqiri_example_rdma_read_write)
 install(TARGETS daqiri_example_rdma_read_write RUNTIME DESTINATION bin)
+
+add_executable(daqiri_bench_rdma_latency rdma_latency_bench.cpp)
+link_daqiri_bench(daqiri_bench_rdma_latency)
+install(TARGETS daqiri_bench_rdma_latency RUNTIME DESTINATION bin)
+
+add_executable(daqiri_perftest_worker perftest/worker.cpp)
+link_daqiri_bench(daqiri_perftest_worker)
+target_link_libraries(daqiri_perftest_worker PRIVATE Threads::Threads)
+set_target_properties(daqiri_perftest_worker PROPERTIES
+  BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
+  INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+install(TARGETS daqiri_perftest_worker RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

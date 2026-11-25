@@ -402,7 +402,7 @@ canonical config can run both endpoints in one process:
 ```
 
 `rdma_bench_server` and `rdma_bench_client` accept `cpu_core` plus optional
-`tx_depth` and `rx_depth` fields. `cpu_core` pins the benchmark application's
+`tx_depth`, `rx_depth`, and `batch_size` fields. `cpu_core` pins the benchmark application's
 server/client role thread, separately from the DAQIRI queue worker cores. The
 depth defaults follow the `ib_send_bw` shape:
 `tx_depth: 128`, `rx_depth: 512`. The benchmark preposts receive work before
@@ -413,11 +413,16 @@ least `rx_depth` receive buffers and `tx_depth` transmit buffers per side.
 
 To use caller-driven RDMA polling, set `poll_mode: direct` on the interface's
 RX and/or TX queue and remove that queue's `cpu_core`, `batch_size`, and RX
-`timeout_us` fields. The benchmark already submits one packet per request and
-polls both RX and TX completions through the connection API. When both directions
-are direct, only the benchmark role thread services data-path work. Small SENDs
-from `huge` or `host_pinned` memory are inlined when they fit the QP's returned
+`timeout_us` fields. The role's `batch_size` defaults to one message per submission.
+Set it to 32 on the sending role with indirect TX to batch the SENDs. A receive-only
+role with direct RX and TX and `--workload none` polls and reposts up to 32 receives
+at a time. When both directions are direct, only the benchmark role thread services
+data-path work. Small SENDs from `huge` or `host_pinned` memory are inlined
+when they fit the QP's returned
 inline capacity (128 bytes requested); GPU messages use DMA.
+
+Use [`daqiri_bench_rdma_latency`](perftest.md#control-the-workload) for a paired
+direct RC SEND round trip with prepared buffers.
 
 RDMA applications can enable `tx.accurate_send: true` and call
 `set_packet_tx_time()` before submitting a SEND to schedule it on supported mlx5

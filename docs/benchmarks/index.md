@@ -5,6 +5,9 @@ hide:
 
 # Benchmarking
 
+Use [DAQIRI perftest](perftest.md) for CLI-driven bandwidth and latency baselines
+across raw Ethernet, RoCE, TCP, and UDP.
+
 DAQIRI ships with several stream types to handle different types of incoming and outgoing streams. Choosing the stream type depends on the type of sensor being used and its capabilities. The `stream_type` is decided from the decision tree below:
 
 <div class="img-visual-frame" markdown="1">
