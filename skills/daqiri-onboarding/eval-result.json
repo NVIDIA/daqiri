@@ -1,113 +1,158 @@
 {
   "results": [
-    {"validator": "AGENT_EVAL"}
+    {
+      "validator": "AGENT_EVAL"
+    }
   ],
   "tier3": {
     "schema_version": "2.0",
     "skill_name": "daqiri-onboarding",
-    "bindings": {"validated_sha": "b04aa62d95d77e1829e553c2e14e1bc8ca0df73f"},
+    "bindings": {
+      "validated_sha": "4d38aa791f81a4178b2f1fb8c51f332bf6cf1fcd"
+    },
     "execution_status": "succeeded",
     "execution_errors": [],
-    "partial": false,
-    "evaluator_version": "daqiri-paired-cli-byoe-v4-external-minimal",
-    "evaluated_at": "2026-11-09T17:33:38.204314+00:00",
-    "dataset_summary": {"total_tasks": 8, "positive_tasks": 7, "negative_tasks": 1, "unclassified_tasks": 0},
-    "agents_run": ["codex", "claude"],
-    "requested_agents": ["codex", "claude"],
-    "metric_ids": ["assertion_pass_rate", "task_success", "scope_preservation", "skill_activation_alignment"],
-    "overall_score": 1,
-    "baseline_overall": 1,
-    "overall_lift": 0,
+    "evaluator_version": "daqiri-paired-cli-byoe",
+    "evaluated_at": "2026-11-25T00:43:21.205029+00:00",
+    "dataset_summary": {
+      "total_tasks": 14,
+      "positive_tasks": 14,
+      "negative_tasks": 0,
+      "unclassified_tasks": 0
+    },
+    "agents_run": [
+      "codex",
+      "claude"
+    ],
+    "overall_score": 1.0,
+    "baseline_overall": 1.0,
+    "overall_lift": 0.0,
     "verdict": "PASS",
-    "attempt_policy": {"max_attempts": 1, "pass_threshold": 1.0, "stop_on_pass": false},
-    "quality_verdict_note": "Producer self-assessment only; no CI publication or security verdict is asserted.",
+    "attempt_policy": {
+      "max_attempts": 3,
+      "pass_threshold": 1.0,
+      "stop_on_pass": false
+    },
     "agents": {
       "codex": {
         "name": "codex",
-        "model": "gpt-6.1-sol",
-        "partial": false,
+        "model": null,
         "execution_status": "succeeded",
         "execution_errors": [],
-        "with_skill": 1,
-        "baseline": 1,
-        "lift": 0,
-        "num_trials": 8,
-        "num_trials_baseline": 8,
+        "with_skill": 1.0,
+        "baseline": 1.0,
+        "lift": 0.0,
+        "num_trials": 42,
+        "num_trials_baseline": 42,
         "baseline_ran": true,
-        "dimensions": [
-          {"id": "security", "score": 1, "with_skill": 1, "baseline": 1, "lift": 0, "partial": false, "evaluators": ["scope_preservation"]},
-          {"id": "correctness", "score": 1, "with_skill": 1, "baseline": 1, "lift": 0, "partial": false, "evaluators": ["assertion_pass_rate"]},
-          {"id": "discoverability", "score": 1, "with_skill": 1, "baseline": null, "lift": null, "partial": true, "evaluators": ["skill_activation_alignment"]},
-          {"id": "effectiveness", "score": 1, "with_skill": 1, "baseline": 1, "lift": 0, "partial": false, "evaluators": ["task_success"]},
-          {"id": "efficiency", "score": null, "with_skill": null, "baseline": null, "lift": null, "partial": true, "evaluators": ["measured_resources"]}
-        ],
+        "dimensions": [],
         "resources": {
-          "with_skill": {"prompt_tokens": 2871406, "completion_tokens": 38507, "cached_tokens": 2519040, "total_tokens": 2909913, "runtime_seconds": 972.788494348526, "measured_attempts": 8, "missing_attempts": 0},
-          "without_skill": {"prompt_tokens": 2353090, "completion_tokens": 32092, "cached_tokens": 2065920, "total_tokens": 2385182, "runtime_seconds": 832.1475389003754, "measured_attempts": 8, "missing_attempts": 0}
-        },
-        "pass_at_k": {
-          "k": 1,
-          "with_skill": {"total_cases": 8, "passed_cases": 8, "unscored_cases": 0},
-          "baseline": {"total_cases": 8, "passed_cases": 8, "unscored_cases": 0}
+          "tokens": {
+            "with_skill": {
+              "status": "complete",
+              "measured_trials": 42,
+              "trials": 42,
+              "total": 19399682
+            },
+            "baseline": {
+              "status": "complete",
+              "measured_trials": 42,
+              "trials": 42,
+              "total": 20462158
+            },
+            "delta": -1062476
+          },
+          "agent_seconds": {
+            "with_skill": {
+              "status": "complete",
+              "measured_trials": 42,
+              "trials": 42,
+              "total": 5070.920373184956
+            },
+            "baseline": {
+              "status": "complete",
+              "measured_trials": 42,
+              "trials": 42,
+              "total": 5145.027480721154
+            },
+            "delta": -74.10710753619787
+          }
         }
       },
       "claude": {
         "name": "claude",
         "model": "claude-opus-5-5",
-        "partial": false,
         "execution_status": "succeeded",
         "execution_errors": [],
-        "with_skill": 1,
-        "baseline": 1,
-        "lift": 0,
-        "num_trials": 8,
-        "num_trials_baseline": 8,
+        "with_skill": 1.0,
+        "baseline": 1.0,
+        "lift": 0.0,
+        "num_trials": 42,
+        "num_trials_baseline": 42,
         "baseline_ran": true,
-        "dimensions": [
-          {"id": "security", "score": 1, "with_skill": 1, "baseline": 1, "lift": 0, "partial": false, "evaluators": ["scope_preservation"]},
-          {"id": "correctness", "score": 1, "with_skill": 1, "baseline": 1, "lift": 0, "partial": false, "evaluators": ["assertion_pass_rate"]},
-          {"id": "discoverability", "score": 1, "with_skill": 1, "baseline": null, "lift": null, "partial": true, "evaluators": ["skill_activation_alignment"]},
-          {"id": "effectiveness", "score": 1, "with_skill": 1, "baseline": 1, "lift": 0, "partial": false, "evaluators": ["task_success"]},
-          {"id": "efficiency", "score": null, "with_skill": null, "baseline": null, "lift": null, "partial": true, "evaluators": ["measured_resources"]}
-        ],
+        "dimensions": [],
         "resources": {
-          "with_skill": {"prompt_tokens": 4577080, "completion_tokens": 67715, "cached_tokens": 4312694, "total_tokens": 4644795, "runtime_seconds": 678.5524678230286, "measured_attempts": 8, "missing_attempts": 0},
-          "without_skill": {"prompt_tokens": 4581227, "completion_tokens": 72012, "cached_tokens": 4323380, "total_tokens": 4653239, "runtime_seconds": 748.8132855892181, "measured_attempts": 8, "missing_attempts": 0}
-        },
-        "pass_at_k": {
-          "k": 1,
-          "with_skill": {"total_cases": 8, "passed_cases": 8, "unscored_cases": 0},
-          "baseline": {"total_cases": 8, "passed_cases": 8, "unscored_cases": 0}
+          "tokens": {
+            "with_skill": {
+              "status": "complete",
+              "measured_trials": 42,
+              "trials": 42,
+              "total": 62214352
+            },
+            "baseline": {
+              "status": "complete",
+              "measured_trials": 42,
+              "trials": 42,
+              "total": 83879903
+            },
+            "delta": -21665551
+          },
+          "agent_seconds": {
+            "with_skill": {
+              "status": "complete",
+              "measured_trials": 42,
+              "trials": 42,
+              "total": 8527.206887534965
+            },
+            "baseline": {
+              "status": "complete",
+              "measured_trials": 42,
+              "trials": 42,
+              "total": 10021.163960701087
+            },
+            "delta": -1493.9570731661224
+          }
         }
       }
     },
     "scoring_methodology": {
-      "method": "Self-assessed committed case-assertion checklists; all case assertions must pass.",
-      "comparison": "One fresh session per task/agent/condition; identical repository, docs, runtime, inputs and permissions; baseline omits the skill.",
-      "activation": "Observed SKILL.md read or native Skill invocation, not metadata advertisement alone.",
-      "security": "Scope/fixture preservation only, not a security scan.",
-      "resources": "Actual CLI elapsed time and cached-inclusive token counts; no normalized efficiency score."
+      "overall": "Binary core task completion. Incorrect calculations/configuration, missing required operations and unsafe ownership advice fail. Reporting-only certainty overstatements are notes when core work is correct.",
+      "review": "Saved answers were blindly reviewed and adjudicated; the reporting-note policy was adopted retrospectively and applied to both arms. No participant reruns or replaced attempts.",
+      "resources": "All scheduled attempts; tokens are cache-inclusive prompt plus output, counting cache reads once. Agent seconds are participant CLI wall time including tool and hardware-queue waits; setup/grading excluded. No LLM/tool timing split or native dimension scores are claimed.",
+      "hardware": "All 36 required bounded hardware executions were verified against authentic receipts and submitted configurations."
     },
-    "producer_metadata": {"codex_cli": "0.167.0", "claude_cli": "2.1.319", "effort": "xhigh", "dataset_sha256": "0cd88d9527c6eb544bf13dc1f55d00729dbb2d2aad10f429e02da9367aa79e15"},
-    "additional_findings": [
-      {
-        "trial_id": "claude-with-skill-04-diagnose-log",
-        "observation": "The answer says the log's 'retains several outstanding bursts' means the pool's spare capacity got used up.",
-        "correction": "The fixture does not quantify retained buffers or identify the exhausted pool; reported retention alone does not prove it exhausted packet-buffer capacity.",
-        "grading_assessment": "The full answer explicitly treats the exact error/engine/onset as unknown, distinguishes leak, slow consumer and capacity as possibilities, and requests measurements to distinguish them. Assertion3 is met holistically, while this overly definite attribution remains a current finding; checklist success is not exhaustive answer-accuracy certification."
+    "producer_metadata": {
+      "agents": {
+        "codex": {
+          "model_requested": "gpt-6.1-sol",
+          "model_observed": null,
+          "effort_requested": "xhigh",
+          "effort_observed": null,
+          "cli_version": "0.167.0"
+        },
+        "claude": {
+          "model_requested": "claude-opus-5-5",
+          "model_observed": "claude-opus-5-5",
+          "effort_requested": "xhigh",
+          "effort_observed": null,
+          "cli_version": "2.1.319"
+        }
       },
-      {
-        "trial_id": "claude-without-skill-07-raw-smoke",
-        "observation": "The answer opens with 'Every packet sent on det1 came back ... with no loss' and describes the 4,096 packets not consumed by the application at shutdown as 'not lost'.",
-        "correction": "TX, hardware-loopback and RX-worker packet counts match, with zero selected error/drop increments. This supports no observed NIC count deficit, but does not establish payload identity or fully drained application delivery; the application consumed 4,096 fewer packets.",
-        "grading_assessment": "The response discloses the application count gap, labels HW loopback/host_pinned correctly and explicitly leaves payload/cable/throughput unverified. The committed raw-smoke assertions are met, with absolute losslessness wording retained as a current overstatement."
-      },
-      {
-        "trial_id": "claude-with-skill-07-raw-smoke",
-        "observation": "The answer says 'every packet sent came back ... nothing was dropped' and 'None were dropped' while disclosing an application count gap of 4,096.",
-        "correction": "Matching TX/loopback/RX-worker counts and zero selected error/drop increments support no observed NIC count deficit. Payload identity and fully drained application delivery were not established; the application consumed 4,096 fewer packets.",
-        "grading_assessment": "The response accurately labels internal hardware loopback/host_pinned memory, discloses the application gap, and distinguishes cable/GPU-resident/sustained-throughput claims. The committed raw-smoke assertions are met, while absolute losslessness wording remains a current overstatement."
-      }
-    ]
+      "authored_dataset_sha256": "4760a9401252d694edd7801b84b47a458a3ea681643ad9a0a9133600cb94ef5c",
+      "campaign_bundle_sha256": "1f07d775dc54f013a891f17f320d352044536951445dc04e084c6a5871582fe3",
+      "grading_protocol_sha256": "a577a3be260c19a574319e4ba4f58b78de4452201cb7f736d19c5d85cac907ef",
+      "finalized_table_sha256": "2fe7a6808fe70a3f1d4912eb37db001b74d2902318f031a767e94a35eb90f376"
+    },
+    "quality_verdict_note": "Producer self-assessment only; CI independently decides publication and signing."
   }
 }
