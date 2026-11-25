@@ -150,7 +150,7 @@ class Control {
 struct Settings {
   std::string transport, role, client_ip, server_ip;
   bool raw, roce, tcp, latency, hardware, rtt, hardware_rtt, bidirectional, tx_direct, rx_direct;
-  bool named_sender, prepared_device_frames, opaque_payload;
+  bool direct_roce_rtt, named_sender, prepared_device_frames, opaque_payload;
   int bytes, message_size, batch, rx_depth, tx_depth, samples, warmup_samples, realtime_priority;
   uint64_t duration, warmup, timeout;
 
@@ -169,6 +169,7 @@ struct Settings {
         bidirectional(cfg["bidirectional"].as<bool>()),
         tx_direct(cfg["tx_direct"].as<bool>()),
         rx_direct(cfg["rx_direct"].as<bool>()),
+        direct_roce_rtt(cfg["direct_roce_rtt"].as<bool>(false)),
         named_sender(cfg["named_sender"].as<bool>(false)),
         prepared_device_frames(cfg["prepared_device_frames"].as<bool>(false)),
         opaque_payload(cfg["opaque_payload"].as<bool>(false)),
@@ -982,8 +983,7 @@ YAML::Node latency_phase(const Settings& cfg, Lane& lane, bool origin, const Con
   std::vector<Probe> probes;
   if (origin) probes.reserve(cfg.samples);
   const uint64_t iterations = static_cast<uint64_t>(cfg.warmup_samples) + cfg.samples;
-  if (cfg.roce && cfg.rtt && !cfg.bidirectional && !cfg.hardware && cfg.tx_direct &&
-      cfg.rx_direct) {
+  if (cfg.direct_roce_rtt) {
     auto ping_pong = lane.prepare_rdma_ping_pong();
     control.barrier(5);
     for (uint64_t seq = 0; seq < iterations; ++seq) {

@@ -487,6 +487,59 @@ def test_bandwidth_report_groups_application_and_nic_rates(frontend, capsys):
     assert "rx_bytes_phy" in output and "1.300" in output and "unavailable" in output
 
 
+@pytest.mark.parametrize("role,rx_poll,peer_direct,protocol,expected", [
+    ("client", "direct", True, 2, True),
+    ("client", "direct", False, 2, False),
+    ("server", "indirect", True, 2, False),
+    ("server", "direct", True, 1, None),
+])
+def test_roce_rtt_negotiates_direct_polling(frontend, monkeypatch, capsys,
+                                          role, rx_poll, peer_direct, protocol, expected):
+    topology = importlib.import_module("daqiri_config.perftest")
+    monkeypatch.setattr(topology, "socket_interfaces", lambda *_: {})
+    monkeypatch.setattr(topology, "run_ip", lambda *_: [{}])
+    monkeypatch.setattr(frontend, "executable", lambda *args: Path("/unused"))
+    monkeypatch.setattr(frontend.subprocess, "check_output", lambda *a, **kw: "ibverbs")
+    monkeypatch.setattr(frontend.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(a, 0))
+    monkeypatch.setattr(frontend, "tuning_preflight", lambda _: [])
+    monkeypatch.setattr(frontend, "cpu_clock", lambda: {"boot": None})
+
+    class Peer:
+        def __init__(self, *_):
+            pass
+
+        def exchange(self, hello):
+            assert hello["settings"]["protocol"] == 2
+            assert hello["direct_polling"] == (rx_poll == "direct")
+            return hello | {"role": "server" if role == "client" else "client",
+                            "settings": hello["settings"] | {"protocol": protocol},
+                            "direct_polling": peer_direct}
+
+    selected = []
+
+    def run(args, worker, path, output, peer, hardware, case):
+        config = frontend.yaml.safe_load(path.read_text())
+        selected.append(config["perftest"]["direct_roce_rtt"])
+        measurement = {"direction": "client->server", "queue": 0,
+                       "timeouts": 0, "probes": [[0, 100, None]]}
+        return 0, [{"version": "test", "role": role, "latency": [measurement],
+                    "local_route": False, "configuration": config}]
+
+    monkeypatch.setattr(frontend, "Peer", Peer)
+    monkeypatch.setattr(frontend, "run_case", run)
+    status = frontend.main(["lat", "--transport", "roce", "--topology", "two-host",
+                            "--role", role, "--client-address", "192.0.2.1",
+                            "--server-address", "192.0.2.2", "--control", "192.0.2.2:18500",
+                            "--message-size", "64", "--rx-poll", rx_poll])
+    if expected is None:
+        assert status == 1
+        assert "peer settings or roles do not match" in capsys.readouterr().err
+        assert selected == []
+    else:
+        assert status == 0
+        assert selected == [expected]
+
+
 def test_hardware_failure_reruns_after_preflight(frontend, monkeypatch, tmp_path, capsys):
     topology = importlib.import_module("daqiri_config.perftest")
     monkeypatch.setattr(topology, "resolve_interface",

@@ -432,7 +432,8 @@ def resolve(args) -> list[str]:
     return list(dict.fromkeys(warnings))
 
 
-def build_config(args, case: int, *, hardware: bool, rtt: bool) -> dict:
+def build_config(args, case: int, *, hardware: bool, rtt: bool,
+                 peer_direct_polling: bool = False) -> dict:
     size = args.sizes[case]
     if args.hardware_rtt and args.role == "server" and not args.bidirectional:
         hardware = False
@@ -553,6 +554,10 @@ def build_config(args, case: int, *, hardware: bool, rtt: bool) -> dict:
                          "batch": 1 if args.tx_poll == "direct" else args.batch_size,
                          "tx_direct": args.tx_poll == "direct", "rx_direct": args.rx_poll == "direct",
                          "bidirectional": args.bidirectional, "hardware": hardware, "rtt": rtt,
+                         "direct_roce_rtt": (args.roce and args.test == "lat" and rtt and not hardware
+                                             and not args.bidirectional
+                                             and args.tx_poll == args.rx_poll == "direct"
+                                             and (args.role == "local" or peer_direct_polling)),
                          "hardware_rtt": args.hardware_rtt,
                          "seconds": args.seconds, "warmup_seconds": args.warmup_seconds,
                          "samples": args.samples, "warmup_samples": args.warmup_samples,

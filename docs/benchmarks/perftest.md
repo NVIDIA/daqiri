@@ -49,7 +49,11 @@ can use direct RX and TX queues for bulk receive recycling.
 
 `daqiri_bench_rdma_latency CONFIG server|client WARMUP SAMPLES CSV` uses
 the same preallocated direct RC ping-pong loop as the CLI's unidirectional
-software RTT mode. Give each role a separate YAML with direct RX and TX and set
+software RTT mode. The CLI uses this loop when both peers select direct RX
+and TX polling. A pair with mixed polling modes uses the per-probe control
+exchange. Run the same perftest build on both peers for RoCE latency.
+
+For the standalone example, give each role a separate YAML with direct RX and TX and set
 `message_size`, `cpu_core`, and `rx_depth` in its `rdma_bench_<role>`
 section. Use the bandwidth example's `DATA_TX_GPU_<ROLE>` and
 `DATA_RX_GPU_<ROLE>` memory region names. Both roles must use the same

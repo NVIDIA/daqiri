@@ -412,7 +412,9 @@ def settings(args) -> dict:
     keys = ("transport", "topology", "test", "queues", "sizes", "size_kind", "bidirectional",
             "seconds", "warmup_seconds", "samples", "warmup_samples", "server_port",
             "client_port", "client_address", "server_address")
-    result = {"protocol": 1, **{key: getattr(args, key) for key in keys}}
+    # Older RoCE latency peers could select the direct RTT loop unilaterally.
+    protocol = 2 if args.roce and args.test == "lat" else 1
+    result = {"protocol": protocol, **{key: getattr(args, key) for key in keys}}
     if args.hardware_rtt:
         result["hardware_rtt"] = True
     return result
@@ -798,6 +800,7 @@ def main(argv=None) -> int:
             local_clock = cpu_clock() if args.role != "local" else {}
             peer = Peer(args, stack) if args.role != "local" else None
             same_boot = True
+            peer_direct_polling = False
             peer_findings = []
             peer_notices = []
             if peer:
@@ -806,9 +809,11 @@ def main(argv=None) -> int:
                                        "findings": findings, "notices": notices,
                                        "benchmark_cpus": sorted(args.benchmark_cpus),
                                        "opaque_payload": args.opaque_payload,
+                                       "direct_polling": args.tx_poll == args.rx_poll == "direct",
                                        "refresh_phc": True})
                 if hello["settings"] != settings(args) or hello["role"] == args.role:
                     raise ConfigError("benchmark peer settings or roles do not match")
+                peer_direct_polling = hello.get("direct_polling") is True
                 if args.opaque_payload and "opaque_payload" not in hello:
                     raise ConfigError("the benchmark peer does not support opaque device payloads")
                 args.opaque_payload |= hello.get("opaque_payload", False)
@@ -863,7 +868,8 @@ def main(argv=None) -> int:
                         print(f"Measuring {size} B {args.size_kind}s", file=sys.stderr, flush=True)
                     current_hw = hardware
                     for _ in range(2):
-                        document = build_config(args, case, hardware=current_hw, rtt=rtt)
+                        document = build_config(args, case, hardware=current_hw, rtt=rtt,
+                                                peer_direct_polling=peer_direct_polling)
                         path.write_text(render_document(document))
                         status, results = run_case(args, worker, path, work / f"result-{case}.yaml",
                                                    peer, current_hw, case)
